@@ -135,6 +135,39 @@ ui_page_on_widget_mount(page, "btn_x", on_btn_mount, NULL);
 // Fires every time v-if / v-for re-mounts a widget with id="btn_x".
 // Use ui_page_on_widget_unmount for cleanup.`;
 
+const reactiveMenu = `<script>
+export default {
+  data() {
+    return {
+      commands: [
+        { id: 'copy',  label: 'Copy',  enabled: true  },
+        { id: 'paste', label: 'Paste', enabled: false },
+      ],
+      isAdmin: true,
+    };
+  },
+  methods: {
+    run(cmd) { /* ... */ },
+    del()    { /* ... */ },
+  },
+}
+</script>
+
+<template>
+<div id="tree-item">tree</div>
+
+<menu trigger="#tree-item" event="rclick">
+  <menuitem v-for="cmd in commands" :key="cmd.id"
+            :disabled="!cmd.enabled" @click="run(cmd)">
+    <label>{{ cmd.label }}</label>
+  </menuitem>
+  <separator/>
+  <menuitem v-if="isAdmin" @click="del">
+    <label>Delete</label>
+  </menuitem>
+</menu>
+</template>`;
+
 const cIntegration = `// Load + run a .uix file (single-file component)
 UiPage page = ui_page_load_file(L"demo/app.uix");
 if (!page) {
@@ -200,6 +233,12 @@ export function Markup() {
         <h2 className={styles.sectionTitle}>{t("markup.lifecycleTitle")}</h2>
         <p className={styles.paragraph}>{t("markup.lifecycleDesc")}</p>
         <CodeBlock code={lifecycle} language="C" />
+      </div>
+
+      <div className={styles.section}>
+        <h2 className={styles.sectionTitle}>{t("markup.reactiveMenuTitle")}</h2>
+        <p className={styles.paragraph}>{t("markup.reactiveMenuDesc")}</p>
+        <CodeBlock code={reactiveMenu} language=".uix" />
       </div>
 
       <div className={styles.section}>

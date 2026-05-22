@@ -33,6 +33,8 @@ export const apiGroups: ApiGroup[] = [
       { name: "ui_window_set_title", signature: "void ui_window_set_title(UiWindow win, const wchar_t* title)", description: "Change the window title text" },
       { name: "ui_window_invalidate", signature: "void ui_window_invalidate(UiWindow win)", description: "Request a repaint of the window" },
       { name: "ui_window_hwnd", signature: "void* ui_window_hwnd(UiWindow win)", description: "Get the native Win32 HWND handle" },
+      { name: "ui_page_prepare_window", signature: "UiWindow ui_page_prepare_window(UiPage p, const UiWindowConfig* cfg)", description: "1.6.0: pre-create hidden window + Direct2D RT, returns handle without showing. Pair with ui_page_open_window for zero-flash first frame." },
+      { name: "ui_window_dpi_scale", signature: "float ui_window_dpi_scale(UiWindow win)", description: "1.6.0: returns dpi / 96.0, float-friendly DIP <-> screen-px conversion" },
     ],
   },
   {
@@ -177,6 +179,19 @@ export const apiGroups: ApiGroup[] = [
     ],
   },
   {
+    name: "Widget Events & Cursor (1.6.0)",
+    functions: [
+      { name: "ui_widget_on_mouse_move", signature: "void ui_widget_on_mouse_move(UiWidget w, UiMouseMoveCallback cb, void* userdata)", description: "Generic mouse-move callback on any widget (including custom-drawn). Coordinates are widget-local." },
+      { name: "ui_widget_on_mouse_leave", signature: "void ui_widget_on_mouse_leave(UiWidget w, UiCallback cb, void* userdata)", description: "Fires when the mouse leaves the widget rect." },
+      { name: "ui_widget_on_mouse_wheel", signature: "void ui_widget_on_mouse_wheel(UiWidget w, UiWheelCallback cb, void* userdata)", description: "Generic wheel callback on any widget (no longer ScrollView-only)." },
+      { name: "ui_widget_on_focus", signature: "void ui_widget_on_focus(UiWidget w, UiCallback cb, void* userdata)", description: "Fires when the widget gains keyboard focus. Pair with ui_custom_set_focusable for custom widgets." },
+      { name: "ui_widget_on_blur", signature: "void ui_widget_on_blur(UiWidget w, UiCallback cb, void* userdata)", description: "Fires when the widget loses keyboard focus." },
+      { name: "ui_widget_set_cursor", signature: "void ui_widget_set_cursor(UiWidget w, const char* cursor)", description: "Programmatic cursor: 'hand' / 'wait' / 'size-ns' / 'size-we' / 'IDC_*'. Reset by passing NULL." },
+      { name: "ui_custom_set_focusable", signature: "void ui_custom_set_focusable(UiWidget w, int focusable)", description: "Make a custom-drawn widget eligible for keyboard focus; required before on_focus/on_blur fire." },
+      { name: "ui_icon_button_set_hover_visual", signature: "void ui_icon_button_set_hover_visual(UiWidget w, int show)", description: "Toggle the hover highlight on ghost icon buttons." },
+    ],
+  },
+  {
     name: "Page Lifecycle (1.5.0)",
     functions: [
       { name: "ui_page_on_widget_mount", signature: "void ui_page_on_widget_mount(UiPage p, const char* id, UiWidgetLifecycleCallback cb, void* ud)", description: "Fires every time a widget with the given id is mounted (initial render, v-if truthy, v-for build). Receives a fresh widget handle — Vue ref+watch parity" },
@@ -301,6 +316,10 @@ export const apiGroups: ApiGroup[] = [
       { name: "ui_debug_free", signature: "void ui_debug_free(char* ptr)", description: "Free debug string returned by dump functions" },
       { name: "ui_debug_highlight", signature: "void ui_debug_highlight(UiWindow win, const char* id)", description: "Red-border highlight widget by ID" },
       { name: "ui_debug_screenshot", signature: "int ui_debug_screenshot(UiWindow win, const wchar_t* path)", description: "Save window screenshot as PNG" },
+      { name: "ui_debug_screenshot_widget", signature: "int ui_debug_screenshot_widget(UiWindow win, UiWidget w, const wchar_t* path)", description: "Screenshot a single widget region (clipped to widget rect)" },
+      { name: "ui_debug_screenshot_menu", signature: "int ui_debug_screenshot_menu(UiWindow win, const wchar_t* path)", description: "Screenshot the currently open popup menu RT (verify icons/colors/submenu)" },
+      { name: "ui_debug_server_start", signature: "int ui_debug_server_start(UiWindow win, const wchar_t* pipe_name)", description: "Start a Named Pipe debug server bound to the window. 1.6.0: multiple servers can coexist with distinct pipe names (main + settings window can run debug servers concurrently)." },
+      { name: "ui_debug_server_stop", signature: "void ui_debug_server_stop(void)", description: "Stop the debug server before process exit." },
     ],
   },
 ];

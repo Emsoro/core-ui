@@ -222,7 +222,7 @@ private:
     };
     std::vector<TriggerSpec> triggers_;
     uint64_t winHandle_ = 0;
-    std::unordered_map<int, std::string> menuItemHandlers_;
+    std::unordered_map<std::string, std::string> menuItemHandlers_;  // strId → @click JS method
     mutable std::unordered_map<std::string, uint64_t> menuHandleCache_;
 };
 

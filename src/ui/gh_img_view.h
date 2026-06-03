@@ -90,6 +90,18 @@ public:
                          uint32_t* out_w, uint32_t* out_h,
                          Renderer& r);
 
+    // ---- 采样 / 滚轮 ----
+    // Antialias: 放大 (screen-per-source >= 1) 时是否平滑. true (默认) = 现有
+    // HQ_CUBIC/LINEAR 平滑; false = NEAREST_NEIGHBOR, 像素边界清晰 (像素画 /
+    // 逐像素查看). 下采始终走平滑路径不受此影响.
+    void     SetAntialias(bool on)        { antialias_ = on; }
+    bool     Antialias() const            { return antialias_; }
+    // WheelZoomEnabled: 内部 OnMouseWheel 是否缩放. true (默认) = 滚轮缩放;
+    // false = 不缩放, 让宿主用 ui_widget_on_mouse_wheel hook 自行接管滚轮
+    // (hook 在 OnMouseWheel 分发开头无条件 fire, 不受此开关影响).
+    void     SetWheelZoomEnabled(bool on) { wheelZoomEnabled_ = on; }
+    bool     WheelZoomEnabled() const     { return wheelZoomEnabled_; }
+
     // ---- level 选择 ----
     void     SetAutoLevel(bool on)   { autoLevel_ = on; }
     bool     AutoLevel() const       { return autoLevel_; }
@@ -102,7 +114,7 @@ public:
     void  SetZoomAround(float z, float anchorX, float anchorY);
     float PanX() const               { return panX_; }
     float PanY() const               { return panY_; }
-    void  SetPan(float x, float y)   { panX_ = x; panY_ = y; }
+    void  SetPan(float x, float y);   // L47 follow-up: fire NotifyViewport, 见 .cpp
     void  SetZoomRange(float lo, float hi) { minZoom_ = lo; maxZoom_ = hi; }
     void  Fit();    // 长边贴合视口（rotation-aware: 用 effective W/H）
     void  Reset();  // 1:1 居中
@@ -129,6 +141,26 @@ public:
     bool      HasInfo() const        { return info_.fullWidth > 0; }
     const Info& GetInfo() const      { return info_; }
 
+    // ---- Tile evict callback (L48: viewport trim 触发) ----
+    // NotifyViewport 内自动 trim viewport 外 tile 时, 对每个被 trim 的 tile
+    // fire 一次, caller 同步自己端 "已 push" 跟踪状态 (典型 pushed_tiles_
+    // erase), 让下次 viewport callback 能重新 enqueue 该 tile 解码.
+    //
+    // 设计语义 (L48): 跟用户记忆中的"按区加载内存就小"行为对齐 — viewport
+    // 变化时 lib 主动 evict viewport 外的 tile, 内存稳定在
+    //   widget 内 tile bytes ≈ viewport 内 tile 数 × 256KB
+    // 不随 zoom 历史累积. 代价: zoom out / pan 跨 level 重解码 viewport tile,
+    // 单 tile 0.38ms × 4 worker 并发 ≈ 10ms 不可感知.
+    //
+    // 之前 (build 116 v1-v3 LRU 实现) cap 32MB 在 viewport tile 数 > 128 时
+    // (4K 屏 / 大 zoom level) 自相残杀 — evict 自己刚 push 的 tile, 用户
+    // 报告 "中间清晰边缘模糊". 改成 viewport 严格管 + caller pushed_tiles_
+    // 通过 callback 同步, 该 bug 消除.
+    //
+    // callback 在 NotifyViewport (UI 线程) 同步 fire. caller 典型实现一行
+    // pushed_tiles_.erase(key).
+    std::function<void(uint32_t level, uint32_t tx, uint32_t ty)> onTileEvicted;
+
     // ---- Widget 虚函数 ----
     void OnDraw(Renderer& r) override;
     bool OnMouseDown(const MouseEvent& e) override;
@@ -141,6 +173,8 @@ private:
     // ---- 状态 ----
     Info     info_{};
     bool     autoLevel_ = true;
+    bool     antialias_ = true;        // 放大平滑 (默认); false = NEAREST 像素清晰
+    bool     wheelZoomEnabled_ = true; // 内部滚轮缩放 (默认); false 让宿主接管
     uint32_t activeLevel_ = 0;
 
     float zoom_ = 1.0f;
@@ -156,6 +190,11 @@ private:
     bool  dragging_ = false;
     float dragStartX_ = 0, dragStartY_ = 0;
     float dragPanX_ = 0, dragPanY_ = 0;
+    /* L48 followup: 上次 NotifyViewport fire 时的 widget rect, OnDraw 检测
+     * rect 变化 (typical: window resize 让 parent layout 重 size widget) 时
+     * 自动 fire NotifyViewport, 让 caller push 新 viewport tile. 不依赖
+     * caller 在 resize handler 里手动 invalidate viewport. */
+    D2D1_RECT_F lastNotifiedRect_{};
 
     // ---- 瓦块存储（按 level 分桶）----
     struct TileKey {
@@ -183,12 +222,23 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Bitmap> preview_;
     uint32_t previewW_ = 0, previewH_ = 0;
 
+    // L48: NotifyViewport 内调, 清掉 tiles_ 中不在 viewport 范围内的 tile
+    // + 非 active level 的 tile. 每个被清的 tile fire 一次 onTileEvicted,
+    // caller 同步自己端 pushed_tiles_ erase. 内存稳定 = viewport tile × 256KB,
+    // 不随 zoom 历史累积.
+    void TrimToViewport_(uint32_t active_level,
+                          uint32_t visible_tx0, uint32_t visible_tx1,
+                          uint32_t visible_ty0, uint32_t visible_ty1);
+
     /* Build 70+ (L20): SVG 矢量源. 非空时进入 SVG 模式, OnDraw 走
      * DrawSvgDocument 不再画瓦块. svgW_/svgH_ 是 SVG natural size, 跟
      * info_.fullWidth/Height 同步. */
     Microsoft::WRL::ComPtr<ID2D1SvgDocument> svgDoc_;
     uint32_t svgW_ = 0;
     uint32_t svgH_ = 0;
+    /* L75: D2D ID2D1SvgDocument 不渲染 <text>/<foreignObject> 文字 (shapes-only) →
+     * core-ui 自己解析出来, OnDraw 里 DrawSvgDocument 之后 DirectWrite 叠加补渲. */
+    std::vector<SvgTextRun> svgTextRuns_;
 
     // ---- 渲染辅助 ----
     void     DrawLevel(Renderer& r, uint32_t level, const D2D1_RECT_F& dest);

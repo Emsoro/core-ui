@@ -234,8 +234,20 @@ UI_API void ui_dialog_set_show_cancel(UiWidget dialog, int show);
  * 1 = force light, 2 = force dark. */
 UI_API void ui_dialog_set_theme_mode(UiWidget dialog, int mode);
 
-typedef void (*UiMenuCallback)(UiWindow win, int item_id, void* userdata);
+/* 不透明句柄 — 指向被点击菜单项 (id + 全部静态属性). 仅在回调期间有效;
+ * 出回调即失效, 宿主需要的值要当场拷走。 */
+typedef const void* UiMenuItem;
+/* BREAKING (build 130): item_id (int) → UiMenuItem 句柄. 菜单项 id 从"数字耦合
+ * 枚举值"升级为字符串 key, 回调还能读该项任意属性 (data-* 等)。用
+ * ui_menu_item_id / ui_menu_item_attr 取值。 */
+typedef void (*UiMenuCallback)(UiWindow win, UiMenuItem item, void* userdata);
 UI_API void ui_window_on_menu(UiWindow win, UiMenuCallback cb, void* userdata);
+/* 读点击项的 "id" 属性 (key 如 "cmd_delete" 或数字串 "1000")。无 id → NULL。
+ * 返回的指针仅在回调期间有效。UTF-8。 */
+UI_API const char* ui_menu_item_id(UiMenuItem item);
+/* 读点击项的任意静态属性 (如 "data-index" / "shortcut" / 自定义)。缺 → NULL。
+ * 返回的指针仅在回调期间有效。UTF-8。 */
+UI_API const char* ui_menu_item_attr(UiMenuItem item, const char* name);
 
 typedef void (*UiRightClickCallback)(UiWindow win, float x, float y, void* userdata);
 UI_API void ui_window_on_right_click(UiWindow win, UiRightClickCallback cb, void* userdata);
@@ -492,6 +504,16 @@ UI_API int      ui_gh_img_view_get_auto_level(UiWidget w);
 UI_API void     ui_gh_img_view_set_active_level(UiWidget w, uint32_t level);
 UI_API uint32_t ui_gh_img_view_get_active_level(UiWidget w);
 
+/* 采样模式 (抗锯齿). on=1 (默认) 放大时平滑 (HQ_CUBIC/LINEAR); on=0 放大时
+ * NEAREST_NEIGHBOR, 像素边界清晰 (像素画 / 逐像素查看). 下采始终平滑. */
+UI_API void     ui_gh_img_view_set_antialias(UiWidget w, int on);
+UI_API int      ui_gh_img_view_get_antialias(UiWidget w);
+/* 内部滚轮缩放开关. on=1 (默认) 滚轮缩放; on=0 widget 不内部缩放, 宿主用
+ * ui_widget_on_mouse_wheel hook 自行接管滚轮 (如缩放 / 切图二选一). 命令式
+ * 缩放 API (set_zoom / set_zoom_around 等) 不受此开关影响. */
+UI_API void     ui_gh_img_view_set_wheel_zoom_enabled(UiWidget w, int on);
+UI_API int      ui_gh_img_view_get_wheel_zoom_enabled(UiWidget w);
+
 UI_API float    ui_gh_img_view_get_zoom(UiWidget w);
 UI_API void     ui_gh_img_view_set_zoom(UiWidget w, float zoom);
 UI_API void     ui_gh_img_view_set_zoom_around(UiWidget w, float zoom,
@@ -512,6 +534,23 @@ UI_API int      ui_gh_img_view_get_rotation(UiWidget w);
 UI_API void     ui_gh_img_view_on_viewport(UiWidget w,
                                             UiGhImgViewViewportCallback cb,
                                             void* userdata);
+
+/* Tile evict callback — NotifyViewport 内 trim viewport 外 tile 时, lib 对
+ * 每个被清的 tile fire 一次, caller 同步自己端"已 push"状态 (典型
+ * pushed_tiles_ 之类 unordered_set::erase), 让下次 viewport callback 能
+ * 重新 enqueue 该 tile 解码 (如果它又回到 viewport 内).
+ *
+ * 设计语义 (L48): tile cache 严格跟 viewport 绑定, 内存稳态 = viewport 内
+ * tile 数 × 256KB. zoom out / pan 跨 level 重解码 viewport tile, 单 tile
+ * 0.38ms × 4 worker 并发 ~10ms 不可感知.
+ *
+ * 不注册 (cb=NULL) → trim 静默. caller 不维护"已 push"set 也不需要注册.
+ * cb 在 NotifyViewport 调用栈里同步 fire (UI 线程), 不要做阻塞操作. */
+typedef void (*UiGhImgViewTileEvictedCallback)(
+    UiWidget w, uint32_t level, uint32_t tx, uint32_t ty, void* userdata);
+UI_API void     ui_gh_img_view_on_tile_evicted(UiWidget w,
+                                                 UiGhImgViewTileEvictedCallback cb,
+                                                 void* userdata);
 
 /* ------------------------------------------------------------------ */
 /* IconButton (SVG icon button)                                      */
@@ -1019,6 +1058,17 @@ UI_API void  ui_window_resize_with_anchor(UiWindow win,
      - 如果根树里有 TitleBar，visible=false
    关闭时反之。要求窗口在 ui_window_create 时就用 system_frame=0 创建无边框。 */
 UI_API void  ui_window_enable_canvas_mode(UiWindow win, int enable);
+
+/* L57 (build 124+): 锁定窗口 aspect 比例 — 用户拖窗任意一条边 / 角 resize 时,
+ * lib 在 WM_SIZING 收到 user 拖出的 RECT 后, 按 ratio 算合法 size 写回, Win32
+ * 把这个 RECT 当 user 实际拖的 size 处理. 拖横向 → 按 w 算 h; 拖纵向 → 按 h
+ * 算 w; 拖角 → 按拖动幅度大的那边算另一边.
+ *
+ * 看图器 borderless 模式典型用法: enter 时调 set_aspect_lock(win, img_w, img_h),
+ * 切图时更新, exit 时 set_aspect_lock(win, 0, 0) 解锁.
+ *
+ * ratio_w 或 ratio_h 任一 <= 0 = disable (默认). */
+UI_API void  ui_window_set_aspect_lock(UiWindow win, int ratio_w, int ratio_h);
 
 /* ------------------------------------------------------------------ */
 /* Font / Text rendering (since 1.3.0)                                 */

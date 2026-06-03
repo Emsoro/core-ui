@@ -147,16 +147,10 @@ public:
     const std::wstring& Text() const { return text_; }
     void SetText(const std::wstring& t) { text_ = t; ui::RequestLayout(); }
     void SetChecked(bool v);
-    void SetCheckedImmediate(bool v) { checked_ = v; checkAnimProgress_ = checked_ ? 1.0f : 0.0f; animating_ = false; boundOnce_ = true; }
-    // Mirror ToggleWidget::SetOnFromBinding: first call after construction
-    // snaps so the page mounts in its initial state without a 0→target
-    // sweep; subsequent calls animate. Lets reactive `:checked` binding
-    // round-trip cleanly without nuking the animation kicked off in
-    // OnMouseUp.
-    void SetCheckedFromBinding(bool v) {
-        if (!boundOnce_) { boundOnce_ = true; SetCheckedImmediate(v); return; }
-        SetChecked(v);
-    }
+    // Set value without animation. Used by PageState mount-phase dispatch
+    // (Widget::PaintedOnce() == false) and any caller that explicitly wants
+    // to skip the transition.
+    void SetCheckedImmediate(bool v) { checked_ = v; checkAnimProgress_ = checked_ ? 1.0f : 0.0f; animating_ = false; }
 
     void SetAnimationDuration(float durationMs) { animDurationMs_ = durationMs; }
     float GetAnimationDuration() const { return animDurationMs_; }
@@ -179,7 +173,6 @@ private:
     bool animating_ = false;
     float animDurationMs_ = 200.0f;
     EasingFunction easingFunc_ = EasingFunction::EaseOutCubic;
-    bool boundOnce_ = false;  // first SetCheckedFromBinding snaps; later ones animate
     float ContentRight_() const;
 
     friend class UiWindowImpl;
@@ -415,6 +408,21 @@ public:
         if (selectedIndex_ >= (int)items_.size()) selectedIndex_ = items_.empty() ? -1 : 0;
     }
     const std::vector<std::wstring>& Items() const { return items_; }
+
+    // L83 (i18n): per-item i18n key (empty string = literal item, not
+    // translated). The .uix compiler sets these for `<option>@key</option>`;
+    // PageState::SetLocale calls RetranslateItems on locale change so combobox
+    // options translate in place like `<label>`/`<button>` @key do.
+    void SetI18nItemKeys(std::vector<std::string> keys) { i18nKeys_ = std::move(keys); }
+    bool HasI18nKeys() const {
+        for (const auto& k : i18nKeys_) if (!k.empty()) return true;
+        return false;
+    }
+    void RetranslateItems(const std::function<std::wstring(const std::string&)>& tr) {
+        for (size_t i = 0; i < i18nKeys_.size() && i < items_.size(); ++i)
+            if (!i18nKeys_[i].empty()) items_[i] = tr(i18nKeys_[i]);
+    }
+
     const std::wstring& SelectedText() const {
         static std::wstring empty;
         return (selectedIndex_ >= 0 && selectedIndex_ < (int)items_.size())
@@ -439,6 +447,7 @@ public:
 
 private:
     std::vector<std::wstring> items_;
+    std::vector<std::string>  i18nKeys_;   // L83: parallel to items_; "" = literal
     int selectedIndex_ = 0;
     int hoveredIndex_ = -1;
     bool open_ = false;
@@ -525,14 +534,8 @@ public:
     const std::wstring& Text() const { return text_; }
     void SetText(const std::wstring& t) { text_ = t; ui::RequestLayout(); }
     void SetSelected(bool v);
-    void SetSelectedImmediate(bool v) { selected_ = v; selectAnimProgress_ = selected_ ? 1.0f : 0.0f; animating_ = false; boundOnce_ = true; }
-    // Mirror Toggle/CheckBox FromBinding pattern: first call snaps without
-    // animation (initial mount), later calls animate. Avoids the click
-    // round-trip stomping the in-flight ripple animation.
-    void SetSelectedFromBinding(bool v) {
-        if (!boundOnce_) { boundOnce_ = true; SetSelectedImmediate(v); return; }
-        SetSelected(v);
-    }
+    // Set value without animation. Used by PageState mount-phase dispatch.
+    void SetSelectedImmediate(bool v) { selected_ = v; selectAnimProgress_ = selected_ ? 1.0f : 0.0f; animating_ = false; }
     const std::string& Group() const { return group_; }
 
     void SetAnimationDuration(float durationMs) { animDurationMs_ = durationMs; }
@@ -557,7 +560,6 @@ private:
     bool animating_ = false;
     float animDurationMs_ = 200.0f;
     EasingFunction easingFunc_ = EasingFunction::EaseOutCubic;
-    bool boundOnce_ = false;  // first SetSelectedFromBinding snaps; later ones animate
 
     void DeselectSiblings();
     float ContentRight_() const;
@@ -582,15 +584,8 @@ public:
     const std::wstring& Text() const { return text_; }
     void SetText(const std::wstring& t) { text_ = t; ui::RequestLayout(); }
     void SetOn(bool v);
-    void SetOnImmediate(bool v) { on_ = v; animProgress_ = on_ ? 1.0f : 0.0f; animating_ = false; boundOnce_ = true; }
-    // Called by PageState when applying a JS-state binding. First call after
-    // construction snaps without animation (initial mount); subsequent calls
-    // animate. Lets us play a real transition for state changes while the
-    // page mounts in its initial state statically.
-    void SetOnFromBinding(bool v) {
-        if (!boundOnce_) { boundOnce_ = true; SetOnImmediate(v); return; }
-        SetOn(v);
-    }
+    // Set value without animation. Used by PageState mount-phase dispatch.
+    void SetOnImmediate(bool v) { on_ = v; animProgress_ = on_ ? 1.0f : 0.0f; animating_ = false; }
 
     void SetAnimationDuration(float durationMs) { animDurationMs_ = durationMs; }
     float GetAnimationDuration() const { return animDurationMs_; }
@@ -616,7 +611,6 @@ private:
     bool animating_ = false;
     float animDurationMs_ = 200.0f;
     EasingFunction easingFunc_ = EasingFunction::EaseOutCubic;
-    bool boundOnce_ = false;  // first SetOnFromBinding snaps; later ones animate
 
     D2D1_COLOR_F CachedTrackColorOff_;
     D2D1_COLOR_F CachedTrackColorOn_;
@@ -641,14 +635,8 @@ public:
 
     float Value() const { return value_; }
     void SetValue(float v, bool animate = true);
-    void SetValueImmediate(float v) { targetValue_ = std::clamp(v, min_, max_); value_ = targetValue_; animProgress_ = targetValue_; animating_ = false; boundOnce_ = true; }
-    // Mirrors ToggleWidget::SetOnFromBinding: first call after construction
-    // snaps so the page mounts in its initial state without a 0→target
-    // sweep; later calls animate, so reactive updates glide.
-    void SetValueFromBinding(float v) {
-        if (!boundOnce_) { boundOnce_ = true; SetValueImmediate(v); return; }
-        SetValue(v);
-    }
+    // Set value without animation. Used by PageState mount-phase dispatch.
+    void SetValueImmediate(float v) { targetValue_ = std::clamp(v, min_, max_); value_ = targetValue_; animProgress_ = targetValue_; animating_ = false; }
     void SetIndeterminate(bool v) { indeterminate_ = v; }
     bool IsIndeterminate() const { return indeterminate_; }
 
@@ -670,7 +658,6 @@ private:
     bool animating_ = false;
     float animDurationMs_ = 300.0f;
     EasingFunction easingFunc_ = EasingFunction::EaseOutCubic;
-    bool boundOnce_ = false;  // first SetValueFromBinding snaps; later ones animate
     bool indeterminate_ = false;
 
     friend class UiWindowImpl;

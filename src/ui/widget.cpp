@@ -464,6 +464,7 @@ void Widget::DrawTree(Renderer& r) {
     }
 
     OnDraw(r);
+    paintedOnce_ = true;   // L45: mount-phase transition gate, 见 widget.h PaintedOnce()
     DrawFocusRing(r);
 
     // CSS overflow:hidden — clip child paint to this widget's (rounded) shape
@@ -1197,6 +1198,7 @@ void StackWidget::DoLayout() {
 void StackWidget::DrawTree(Renderer& r) {
     if (!visible) return;
     OnDraw(r);
+    paintedOnce_ = true;   // L45: mount-phase transition gate
     DrawFocusRing(r);
     if (activeIndex_ >= 0 && activeIndex_ < (int)children_.size()) {
         children_[activeIndex_]->DrawTree(r);

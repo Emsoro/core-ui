@@ -1990,6 +1990,7 @@ void TabControlWidget::OnDraw(Renderer& r) {
 void TabControlWidget::DrawTree(Renderer& r) {
     if (!visible) return;
     OnDraw(r);
+    paintedOnce_ = true;   // L45: mount-phase transition gate
 
     // Clip children to the content area (below tab headers)
     D2D1_RECT_F contentArea = {rect.left, rect.top + tabHeight_, rect.right, rect.bottom};
@@ -2144,6 +2145,7 @@ void ScrollViewWidget::DrawTree(Renderer& r) {
     if (!visible) return;
     // Draw background + scrollbar
     OnDraw(r);
+    paintedOnce_ = true;   // L45: mount-phase transition gate
     // Draw content inside clip region — only once
     r.PushClip(rect);
     if (content_) content_->DrawTree(r);
@@ -4363,6 +4365,7 @@ void ExpanderWidget::OnDraw(Renderer& r) {
 
 void ExpanderWidget::DrawTree(Renderer& r) {
     if (!visible) return;
+    paintedOnce_ = true;   // L45: mount-phase transition gate; Expander DrawTree 自绘 header 不调 OnDraw, 这里手动标记
 
     bool dark = theme::IsDark();
     float fontSize = (css.fontSize > 0) ? css.fontSize : theme::kFontSizeNormal;
@@ -5072,6 +5075,7 @@ void SplitViewWidget::DrawTree(Renderer& r) {
     if (!visible) return;
 
     OnDraw(r);
+    paintedOnce_ = true;   // L45: mount-phase transition gate
 
     bool isOverlay = (mode_ == SplitViewMode::Overlay || mode_ == SplitViewMode::CompactOverlay);
 

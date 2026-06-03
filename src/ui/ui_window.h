@@ -55,7 +55,7 @@ public:
     std::function<void(const std::wstring&)> onDrop;
     std::function<void(int)> onKey;
     std::function<void(float, float)> onRightClick;
-    std::function<void(int)> onMenuItemClick;
+    std::function<void(const MenuClickInfo*)> onMenuItemClick;  // 点击项 id+属性载荷
 
     // Focus management
     Widget* focusedWidget_ = nullptr;
@@ -107,6 +107,11 @@ private:
     void OnMouseMove(float x, float y);
     void OnMouseDown(float x, float y);
     void OnMouseUp(float x, float y);
+    /* 鼠标 capture 被外部夺走 (WM_CAPTURECHANGED, 典型 DoDragDrop 起拖) 时调:
+     * 复位 press 中的 widget (清 pressedWidget_ + OnMouseUp 取消其 drag 状态),
+     * 但不 fire onClick. 否则 widget 收不到 WM_LBUTTONUP 卡在 drag 态, 后续
+     * hover 仍被路由 OnMouseMove → 误拖/误 pan. */
+    void CancelMouseCapture();
     void OnMouseDoubleClick(float x, float y);
     void OnMouseWheel(float x, float y, int delta);
     void OnDropFiles(HDROP hDrop);
@@ -135,6 +140,11 @@ private:
     /* 背景模式：0=主题色填充（默认），1=透明/不擦背景（widget 自己全覆盖画）。
      * 无边框画布模式下设 1，避免 SetWindowPos 扩窗口时的背景闪烁。 */
     int         bgMode_ = 0;
+    /* L57: aspect ratio lock — 用户拖窗 resize 时按这个比例锁另一边. 0/0
+     * = disable (默认). 看图器 borderless 模式 enter 时设 = (image_w, image_h),
+     * exit 时清零. WM_SIZING 收到 user 拖出的 RECT 后, 按 ratio 算合法 size
+     * 写回, Win32 把这个 RECT 当 user 实际拖的 size. */
+    int         aspectLockW_ = 0, aspectLockH_ = 0;
     UINT        dpi_ = 96;
     float       dpiScale_ = 1.0f;
     std::wstring title_;
@@ -233,6 +243,8 @@ public:
     void SetMinSize(int wDip, int hDip) { minWOverride_ = wDip; minHOverride_ = hDip; }
     void SetBackgroundMode(int mode)    { bgMode_ = mode; }
     int  BackgroundMode() const         { return bgMode_; }
+    /* L57: 锁定窗口 aspect 比例. 0/0 = disable. 看 aspectLockW_/H_ 注释. */
+    void SetAspectLock(int ratioW, int ratioH) { aspectLockW_ = ratioW; aspectLockH_ = ratioH; }
 
     /* 窗口几何（DIP-native，内部乘 dpiScale_ 转物理像素）。
      * x/y 是屏幕物理坐标（Win32 惯例）；w/h 是 DIP（按当前 DPI 换算）。

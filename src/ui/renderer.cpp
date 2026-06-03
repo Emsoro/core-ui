@@ -3,6 +3,8 @@
 #include <dcomp.h>
 #pragma comment(lib, "dcomp.lib")
 #include <vector>
+#include <map>
+#include <string>
 #include <memory>
 #include <cstdlib>
 #include <cstdio>
@@ -1467,6 +1469,458 @@ static std::vector<PathInfo> ExtractPaths(const std::string& svg) {
     return paths;
 }
 
+// ===================== L75: SVG 文字 (<text> / <foreignObject>) =====================
+
+// UTF-8 → wstring (SVG/HTML 文字是 UTF-8).
+static std::wstring Utf8ToWide(const std::string& s) {
+    if (s.empty()) return L"";
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (len <= 0) return L"";
+    std::wstring ws((size_t)len, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &ws[0], len);
+    return ws;
+}
+
+// 从 CSS style 串取某属性值 ("…;font-size:16px;…" → "16px"). prop 用小写.
+static std::string CssProp(const std::string& style, const char* prop) {
+    std::string needle = prop;
+    size_t p = 0;
+    while ((p = style.find(needle, p)) != std::string::npos) {
+        bool leftOk = (p == 0 || style[p-1]==';' || style[p-1]==' ' ||
+                       style[p-1]=='\t' || style[p-1]=='\n' || style[p-1]=='{');
+        size_t c = p + needle.size();
+        while (c < style.size() && (style[c]==' '||style[c]=='\t')) ++c;
+        if (leftOk && c < style.size() && style[c]==':') {
+            size_t s = c + 1;
+            size_t e = style.find(';', s);
+            std::string v = style.substr(s, e==std::string::npos ? std::string::npos : e - s);
+            size_t a = v.find_first_not_of(" \t\n\r");
+            if (a == std::string::npos) return "";
+            size_t b = v.find_last_not_of(" \t\n\r");
+            return v.substr(a, b - a + 1);
+        }
+        p = c;
+    }
+    return "";
+}
+
+// 解 SVG/CSS 颜色 rgb()/rgba()/#rgb/#rrggbb/基本命名 → D2D1_COLOR_F. false = none/无效.
+static bool ParseSvgColor(const std::string& in, D2D1_COLOR_F& out) {
+    size_t a = in.find_first_not_of(" \t\n\r");
+    if (a == std::string::npos) return false;
+    size_t b = in.find_last_not_of(" \t\n\r");
+    std::string c = in.substr(a, b - a + 1);
+    if (c.empty() || c == "none" || c == "transparent" || c == "currentColor") return false;
+    std::string lc = c; for (auto& ch : lc) ch = (char)tolower((unsigned char)ch);
+    if (c[0] == '#') {
+        unsigned r=0,g=0,bl=0;
+        if (c.size() >= 7) { if (sscanf(c.c_str()+1, "%2x%2x%2x", &r,&g,&bl)!=3) return false; }
+        else if (c.size() >= 4) { unsigned R=0,G=0,B=0;
+            if (sscanf(c.c_str()+1,"%1x%1x%1x",&R,&G,&B)!=3) return false;
+            r=R*17; g=G*17; bl=B*17; }
+        else return false;
+        out = D2D1::ColorF(r/255.0f, g/255.0f, bl/255.0f, 1.0f); return true;
+    }
+    if (lc.compare(0,4,"rgb(")==0 || lc.compare(0,5,"rgba(")==0) {
+        int r=0,g=0,bl=0; float al=1.0f;
+        const char* p = c.c_str() + c.find('(') + 1;
+        int got = sscanf(p, " %d , %d , %d , %f", &r,&g,&bl,&al);
+        if (got < 3) return false;
+        out = D2D1::ColorF(r/255.0f, g/255.0f, bl/255.0f, got>=4 ? al : 1.0f); return true;
+    }
+    if (lc=="black") { out=D2D1::ColorF(0,0,0,1); return true; }
+    if (lc=="white") { out=D2D1::ColorF(1,1,1,1); return true; }
+    if (lc=="red")   { out=D2D1::ColorF(1,0,0,1); return true; }
+    if (lc=="green") { out=D2D1::ColorF(0,0.5f,0,1); return true; }
+    if (lc=="blue")  { out=D2D1::ColorF(0,0,1,1); return true; }
+    if (lc=="gray"||lc=="grey") { out=D2D1::ColorF(0.5f,0.5f,0.5f,1); return true; }
+    return false;
+}
+
+// HTML 实体解码 (常见几个 + 数字实体), 追加到 utf8 串.
+static void AppendDecoded(std::string& out, const std::string& src) {
+    for (size_t i = 0; i < src.size(); ) {
+        if (src[i] == '&') {
+            size_t semi = src.find(';', i);
+            if (semi != std::string::npos && semi - i <= 10) {
+                std::string ent = src.substr(i+1, semi - i - 1);
+                if (ent == "amp") out += '&';
+                else if (ent == "lt") out += '<';
+                else if (ent == "gt") out += '>';
+                else if (ent == "quot") out += '"';
+                else if (ent == "apos") out += '\'';
+                else if (ent == "nbsp") out += ' ';
+                else if (!ent.empty() && ent[0]=='#') {
+                    int code = (ent.size()>1 && (ent[1]=='x'||ent[1]=='X'))
+                             ? (int)strtol(ent.c_str()+2, nullptr, 16)
+                             : atoi(ent.c_str()+1);
+                    if (code > 0 && code < 0x110000) {
+                        if (code < 0x80) out += (char)code;
+                        else if (code < 0x800) { out += (char)(0xC0|(code>>6)); out += (char)(0x80|(code&0x3F)); }
+                        else { out += (char)(0xE0|(code>>12)); out += (char)(0x80|((code>>6)&0x3F)); out += (char)(0x80|(code&0x3F)); }
+                    }
+                } else { out += '&'; out += ent; out += ';'; }  // 未知实体 → 原样
+                i = semi + 1; continue;
+            }
+        }
+        out += src[i++];
+    }
+}
+
+// 抽 [start,end) 内纯文字: 剥 <...> 标签 (<br>/</p>/</div> → 换行), 解实体,
+// 逐行合并空白 + trim + 去空行, → wstring.
+static std::wstring ExtractInnerText(const std::string& svg, size_t start, size_t end) {
+    if (end > svg.size()) end = svg.size();
+    std::string raw;
+    size_t i = start;
+    while (i < end) {
+        if (svg[i] == '<') {
+            size_t te = svg.find('>', i);
+            if (te == std::string::npos || te >= end) break;
+            if (svg.compare(i, 3, "<br") == 0) raw += '\n';
+            else if (svg.compare(i, 4, "</p>") == 0 || svg.compare(i, 6, "</div>") == 0) raw += '\n';
+            i = te + 1;
+        } else {
+            size_t lt = svg.find('<', i);
+            if (lt == std::string::npos || lt > end) lt = end;
+            AppendDecoded(raw, svg.substr(i, lt - i));
+            i = lt;
+        }
+    }
+    // 逐行: 折叠内部空白 + trim, 丢空行, '\n' 连接
+    std::string norm;
+    std::string line;
+    auto flush = [&](){
+        std::string t; bool sp=false, started=false;
+        for (char ch : line) {
+            if (ch==' '||ch=='\t'||ch=='\r') { if (started) sp = true; }
+            else { if (sp) { t+=' '; sp=false; } t += ch; started = true; }
+        }
+        if (!t.empty()) { if (!norm.empty()) norm += '\n'; norm += t; }
+        line.clear();
+    };
+    for (char ch : raw) { if (ch=='\n') flush(); else line += ch; }
+    flush();
+    return Utf8ToWide(norm);
+}
+
+// 通用名 → 主题默认字体 (DirectWrite 不认 CSS generic). 取字体列表首项, 剥引号.
+static std::wstring ResolveFontFamily(const std::string& css) {
+    std::string f = css;
+    size_t comma = f.find(',');
+    if (comma != std::string::npos) f = f.substr(0, comma);
+    // 剥引号 + trim
+    std::string t;
+    for (char ch : f) if (ch!='"' && ch!='\'') t += ch;
+    size_t a = t.find_first_not_of(" \t"); if (a==std::string::npos) return L"";
+    size_t b = t.find_last_not_of(" \t");
+    t = t.substr(a, b - a + 1);
+    std::string lc = t; for (auto& ch : lc) ch = (char)tolower((unsigned char)ch);
+    if (lc.empty() || lc=="sans-serif" || lc=="serif" || lc=="system-ui" ||
+        lc=="ui-sans-serif" || lc=="inherit") return L"";   // → 主题默认
+    return Utf8ToWide(t);
+}
+
+// L87: font-weight 解析. "bold"/"normal"/"bolder"/"lighter" + 数字 100..900.
+static DWRITE_FONT_WEIGHT ParseFontWeight(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\n\r");
+    if (a == std::string::npos) return DWRITE_FONT_WEIGHT_NORMAL;
+    size_t b = s.find_last_not_of(" \t\n\r");
+    std::string lc = s.substr(a, b - a + 1);
+    for (auto& ch : lc) ch = (char)tolower((unsigned char)ch);
+    if (lc == "normal")  return DWRITE_FONT_WEIGHT_NORMAL;
+    if (lc == "bold")    return DWRITE_FONT_WEIGHT_BOLD;
+    if (lc == "bolder")  return DWRITE_FONT_WEIGHT_BOLD;
+    if (lc == "lighter") return DWRITE_FONT_WEIGHT_LIGHT;
+    int n = atoi(lc.c_str());
+    if (n < 1) return DWRITE_FONT_WEIGHT_NORMAL;
+    if (n > 999) n = 999;
+    return (DWRITE_FONT_WEIGHT)n;
+}
+
+// L87: 解析 SVG 所有 <linearGradient>/<radialGradient> → id→渐变. 含 href/xlink:href
+// stop + 几何属性继承 (resolve pass). vbW/vbH = viewBox 尺寸 (userSpaceOnUse 的 % 用).
+static std::map<std::string, SvgTextGradient>
+ParseGradients(const std::string& svg, float vbW, float vbH) {
+    struct Raw {
+        SvgTextGradient g;
+        std::string href;
+        bool hX1=false,hY1=false,hX2=false,hY2=false,hCx=false,hCy=false,hR=false;
+        bool hUnits=false, hXf=false, hStops=false;
+    };
+    std::map<std::string, Raw> raw;
+
+    auto coord = [&](const std::string& s, bool isX, bool userSpace) -> float {
+        bool pct = s.find('%') != std::string::npos;
+        float v = (float)atof(s.c_str());
+        if (userSpace) return pct ? v / 100.0f * (isX ? vbW : vbH) : v;
+        return pct ? v / 100.0f : v;   // objectBoundingBox: 无单位即 0..1 分数
+    };
+
+    size_t pos = 0;
+    while (pos < svg.size()) {
+        size_t lp = svg.find("<linearGradient", pos);
+        size_t rp = svg.find("<radialGradient", pos);
+        size_t lt = (lp < rp) ? lp : rp;
+        if (lt == std::string::npos) break;
+        bool radial = (lt == rp);
+        size_t tagEnd = svg.find('>', lt);
+        if (tagEnd == std::string::npos) break;
+        std::string tag = svg.substr(lt, tagEnd - lt + 1);
+        bool selfClose = (tagEnd > 0 && svg[tagEnd-1] == '/');
+
+        std::string id = extractAttrFromTag(tag, "id");
+        if (id.empty()) { pos = tagEnd + 1; continue; }
+
+        Raw r;
+        r.g.radial = radial;
+        std::string units = extractAttrFromTag(tag, "gradientUnits");
+        if (!units.empty()) { r.hUnits = true; r.g.userSpace = (units == "userSpaceOnUse"); }
+        std::string xf = extractAttrFromTag(tag, "gradientTransform");
+        if (!xf.empty()) { r.hXf = true; r.g.transform = ParseSvgTransform(xf); }
+        r.href = extractAttrFromTag(tag, "href");
+        if (r.href.empty()) r.href = extractAttrFromTag(tag, "xlink:href");
+
+        bool us = r.g.userSpace;
+        if (!radial) {
+            std::string s;
+            // 默认: objectBB 0,0→1,0; userSpace 0,0→100%,0
+            r.g.x1 = 0; r.g.y1 = 0; r.g.x2 = us ? vbW : 1.0f; r.g.y2 = 0;
+            if (!(s = extractAttrFromTag(tag, "x1")).empty()) { r.hX1=true; r.g.x1 = coord(s,true,us); }
+            if (!(s = extractAttrFromTag(tag, "y1")).empty()) { r.hY1=true; r.g.y1 = coord(s,false,us); }
+            if (!(s = extractAttrFromTag(tag, "x2")).empty()) { r.hX2=true; r.g.x2 = coord(s,true,us); }
+            if (!(s = extractAttrFromTag(tag, "y2")).empty()) { r.hY2=true; r.g.y2 = coord(s,false,us); }
+        } else {
+            std::string s;
+            r.g.cx = us ? vbW*0.5f : 0.5f; r.g.cy = us ? vbH*0.5f : 0.5f;
+            r.g.r  = us ? 0.5f*((vbW+vbH)*0.5f) : 0.5f;
+            if (!(s = extractAttrFromTag(tag, "cx")).empty()) { r.hCx=true; r.g.cx = coord(s,true,us); }
+            if (!(s = extractAttrFromTag(tag, "cy")).empty()) { r.hCy=true; r.g.cy = coord(s,false,us); }
+            if (!(s = extractAttrFromTag(tag, "r")).empty())  { r.hR=true;  r.g.r  = coord(s,true,us); }
+        }
+
+        // 子 <stop>
+        if (!selfClose) {
+            const char* closeTag = radial ? "</radialGradient>" : "</linearGradient>";
+            size_t close = svg.find(closeTag, tagEnd);
+            size_t scanEnd = (close == std::string::npos) ? svg.size() : close;
+            size_t sp = tagEnd + 1;
+            while (sp < scanEnd) {
+                size_t st = svg.find("<stop", sp);
+                if (st == std::string::npos || st >= scanEnd) break;
+                size_t se = svg.find('>', st);
+                if (se == std::string::npos || se > scanEnd) break;
+                std::string stag = svg.substr(st, se - st + 1);
+                std::string style = extractAttrFromTag(stag, "style");
+                SvgGradientStop gs;
+                std::string off = extractAttrFromTag(stag, "offset");
+                gs.offset = (float)atof(off.c_str());
+                if (off.find('%') != std::string::npos) gs.offset /= 100.0f;
+                if (gs.offset < 0) gs.offset = 0; if (gs.offset > 1) gs.offset = 1;
+                std::string sc = extractAttrFromTag(stag, "stop-color");
+                if (sc.empty()) sc = CssProp(style, "stop-color");
+                D2D1_COLOR_F col = D2D1::ColorF(0,0,0,1);
+                ParseSvgColor(sc, col);
+                std::string so = extractAttrFromTag(stag, "stop-opacity");
+                if (so.empty()) so = CssProp(style, "stop-opacity");
+                if (!so.empty()) { float a=(float)atof(so.c_str()); col.a *= (a<0?0:(a>1?1:a)); }
+                gs.color = col;
+                r.g.stops.push_back(gs);
+                sp = se + 1;
+            }
+        }
+        r.hStops = !r.g.stops.empty();
+        raw[id] = std::move(r);
+        pos = tagEnd + 1;
+    }
+
+    // href 继承: 自身没设的 stops / 几何 / units / transform 从被引用者拷.
+    // 迭代不动点 (短链), 父未 resolve 完(href 非空)就等下一轮; 环则停留空 stops.
+    for (size_t iter = 0; iter <= raw.size(); ++iter) {
+        bool changed = false;
+        for (auto& kv : raw) {
+            Raw& r = kv.second;
+            if (r.href.empty()) continue;
+            std::string pid = r.href;
+            if (!pid.empty() && pid[0] == '#') pid = pid.substr(1);
+            auto it = raw.find(pid);
+            if (it == raw.end()) { r.href.clear(); changed = true; continue; }
+            Raw& par = it->second;
+            if (!par.href.empty()) continue;  // 父还没 resolve 完, 等
+            if (!r.hStops && !par.g.stops.empty()) { r.g.stops = par.g.stops; r.hStops = true; }
+            if (!r.hUnits) r.g.userSpace = par.g.userSpace;
+            if (!r.hXf)    r.g.transform = par.g.transform;
+            if (!r.hX1) r.g.x1 = par.g.x1;
+            if (!r.hY1) r.g.y1 = par.g.y1;
+            if (!r.hX2) r.g.x2 = par.g.x2;
+            if (!r.hY2) r.g.y2 = par.g.y2;
+            if (!r.hCx) r.g.cx = par.g.cx;
+            if (!r.hCy) r.g.cy = par.g.cy;
+            if (!r.hR)  r.g.r  = par.g.r;
+            r.href.clear();
+            changed = true;
+        }
+        if (!changed) break;
+    }
+
+    std::map<std::string, SvgTextGradient> out;
+    for (auto& kv : raw) out[kv.first] = std::move(kv.second.g);
+    return out;
+}
+
+// 扫 <text> / <foreignObject>, 维护 <g> 继承栈 (transform + opacity + fill + font-*,
+// 同 ExtractPaths 但带文字属性级联), 产出文字 run. L87: 字重/渐变/继承/透明.
+static std::vector<SvgTextRun> ExtractTextRuns(const std::string& svg) {
+    std::vector<SvgTextRun> runs;
+
+    // viewBox 尺寸 (userSpaceOnUse 渐变的 % 用), 缺则用 width/height, 再缺给 0.
+    float vbW = 0, vbH = 0;
+    {
+        std::string vb = ExtractAttr(svg, "svg", "viewBox");
+        float vx, vy;
+        if (vb.empty() || sscanf(vb.c_str(), "%f %f %f %f", &vx, &vy, &vbW, &vbH) != 4) {
+            vbW = (float)atof(ExtractAttr(svg, "svg", "width").c_str());
+            vbH = (float)atof(ExtractAttr(svg, "svg", "height").c_str());
+        }
+    }
+    std::map<std::string, SvgTextGradient> grads = ParseGradients(svg, vbW, vbH);
+
+    // <g> 继承状态: 文字属性沿 g 链级联 ("" / 0 / *Set=false 表示未设).
+    struct GState {
+        D2D1_MATRIX_3X2_F  xf = D2D1::Matrix3x2F::Identity();
+        float              opacity = 1.0f;
+        std::string        fill;                 // 继承 fill (含 url()), "" = 未设
+        bool               fillSet = false;
+        float              fontSize = 0.0f;       // 0 = 未设
+        std::wstring       fontFamily;
+        bool               fontFamilySet = false;
+        DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+        bool               weightSet = false;
+    };
+    std::vector<GState> stack;
+    GState cur;
+
+    // 把一个 <g>/<text> 标签的文字呈现属性灌进 st (own=true 时 fill 也认 color/fill).
+    auto applyTextAttrs = [&](GState& st, const std::string& tag, const std::string& style) {
+        std::string s;
+        if (!(s = extractAttrFromTag(tag, "opacity")).empty() || !(s = CssProp(style,"opacity")).empty()) {
+            float v = (float)atof(s.c_str()); st.opacity *= (v<0?0:(v>1?1:v));
+        }
+        if (!(s = extractAttrFromTag(tag, "fill-opacity")).empty() || !(s = CssProp(style,"fill-opacity")).empty()) {
+            float v = (float)atof(s.c_str()); st.opacity *= (v<0?0:(v>1?1:v));
+        }
+        if ((s = extractAttrFromTag(tag, "fill")).empty()) s = CssProp(style, "fill");
+        if (s.empty()) s = CssProp(style, "color");
+        if (!s.empty()) { st.fill = s; st.fillSet = true; }
+        if ((s = extractAttrFromTag(tag, "font-size")).empty()) s = CssProp(style, "font-size");
+        if (!s.empty()) { float v=(float)atof(s.c_str()); if (v>0) st.fontSize = v; }
+        if ((s = extractAttrFromTag(tag, "font-family")).empty()) s = CssProp(style, "font-family");
+        if (!s.empty()) { st.fontFamily = ResolveFontFamily(s); st.fontFamilySet = true; }
+        if ((s = extractAttrFromTag(tag, "font-weight")).empty()) s = CssProp(style, "font-weight");
+        if (!s.empty()) { st.weight = ParseFontWeight(s); st.weightSet = true; }
+    };
+
+    size_t pos = 0;
+    while (pos < svg.size()) {
+        size_t lt = svg.find('<', pos);
+        if (lt == std::string::npos) break;
+
+        if (svg.compare(lt, 4, "</g>") == 0) {
+            if (!stack.empty()) { cur = stack.back(); stack.pop_back(); }
+            pos = lt + 4; continue;
+        }
+        if (svg.compare(lt,3,"<g ")==0 || svg.compare(lt,3,"<g>")==0 ||
+            svg.compare(lt,3,"<g\t")==0 || svg.compare(lt,3,"<g\n")==0) {
+            size_t tagEnd = svg.find('>', lt);
+            if (tagEnd == std::string::npos) break;
+            std::string tag = svg.substr(lt, tagEnd - lt + 1);
+            stack.push_back(cur);
+            auto tStr = extractAttrFromTag(tag, "transform");
+            if (!tStr.empty()) cur.xf = ParseSvgTransform(tStr) * cur.xf;
+            std::string gStyle = extractAttrFromTag(tag, "style");
+            applyTextAttrs(cur, tag, gStyle);
+            if (tagEnd > 0 && svg[tagEnd-1]=='/') {
+                if (!stack.empty()) { cur = stack.back(); stack.pop_back(); }
+            }
+            pos = tagEnd + 1; continue;
+        }
+
+        bool isText = svg.compare(lt,5,"<text")==0 &&
+                      (svg[lt+5]==' '||svg[lt+5]=='>'||svg[lt+5]=='\t'||svg[lt+5]=='\n');
+        bool isFO   = svg.compare(lt,14,"<foreignObject")==0;
+        if (!isText && !isFO) { pos = lt + 1; continue; }
+
+        size_t tagEnd = svg.find('>', lt);
+        if (tagEnd == std::string::npos) break;
+        std::string tag = svg.substr(lt, tagEnd - lt + 1);
+        bool selfClose = (tagEnd > 0 && svg[tagEnd-1] == '/');
+        const char* closeTag = isText ? "</text>" : "</foreignObject>";
+        size_t closeLen = isText ? 7 : 16;
+        size_t close = selfClose ? tagEnd : svg.find(closeTag, tagEnd);
+        size_t contentEnd = (close==std::string::npos) ? svg.size() : close;
+
+        SvgTextRun run;
+        // 先继承 <g> 链上的呈现属性, 再用 <text> 自身覆盖.
+        GState ts = cur;
+        std::string style = extractAttrFromTag(tag, "style");
+        applyTextAttrs(ts, tag, style);
+
+        run.transform = cur.xf;
+        auto self = extractAttrFromTag(tag, "transform");
+        if (!self.empty()) run.transform = ParseSvgTransform(self) * run.transform;
+        run.x = (float)atof(extractAttrFromTag(tag, "x").c_str());
+        run.y = (float)atof(extractAttrFromTag(tag, "y").c_str());
+
+        if (ts.fontSize > 0) run.fontSize = ts.fontSize;
+        if (ts.fontFamilySet) run.fontFamily = ts.fontFamily;
+        if (ts.weightSet) run.fontWeight = ts.weight;
+        run.opacity = ts.opacity;
+
+        // fill: url(#id) → 渐变; 否则纯色; 都没有 → 默认黑.
+        if (ts.fillSet && !ts.fill.empty()) {
+            const std::string& fill = ts.fill;
+            if (fill.compare(0, 4, "url(") == 0) {
+                size_t h = fill.find('#');
+                size_t e = fill.find(')', h);
+                if (h != std::string::npos && e != std::string::npos) {
+                    std::string id = fill.substr(h + 1, e - h - 1);
+                    auto it = grads.find(id);
+                    if (it != grads.end() && !it->second.stops.empty()) {
+                        run.gradient = it->second;
+                        run.hasGradient = true;
+                    }
+                }
+            } else {
+                D2D1_COLOR_F col;
+                if (ParseSvgColor(fill, col)) run.color = col;
+            }
+        }
+
+        if (isFO) {
+            run.block = true;
+            run.anchor = 1;
+            /* foreignObject 的 (x,y) 是框左上角 (常为 0, 真实位置在父 <g transform>),
+             * 文字要在框内居中 → 锚点设框中心 (x+width/2, y+height/2). 累积 transform
+             * 后即落在 label/node 中心. */
+            float w = (float)atof(extractAttrFromTag(tag, "width").c_str());
+            float h = (float)atof(extractAttrFromTag(tag, "height").c_str());
+            run.x += w / 2.0f;
+            run.y += h / 2.0f;
+            if (w > 1.0f) run.maxWidth = w;
+        } else {
+            std::string anchor = extractAttrFromTag(tag, "text-anchor");
+            if (anchor.empty()) anchor = CssProp(style, "text-anchor");
+            if (anchor == "middle") run.anchor = 1;
+            else if (anchor == "end") run.anchor = 2;
+        }
+
+        if (!selfClose) run.text = ExtractInnerText(svg, tagEnd + 1, contentEnd);
+        if (!run.text.empty()) runs.push_back(std::move(run));
+        pos = (close==std::string::npos) ? svg.size() : close + closeLen;
+    }
+    return runs;
+}
+
 static bool BuildGeometry(ID2D1Factory* factory, const std::vector<std::string>& pathDatas,
                            ID2D1PathGeometry** outGeometry) {
     ComPtr<ID2D1PathGeometry> geom;
@@ -1646,9 +2100,17 @@ SvgIcon Renderer::ParseSvgIcon(const std::string& svgContent) {
         if (!h.empty()) icon.viewBoxH = (float)atof(h.c_str());
     }
 
+    // L75: 文字 run (<text> / <foreignObject>) —— 跟 path 独立提取, 即使没有
+    // path 也要 (纯文字 / 只有 rect 的图表). 给 fallback 路径用; 原生 D2D 路径
+    // 走 ParseSvgTextRuns 单独拿.
+    icon.textRuns = svg_detail::ExtractTextRuns(svgContent);
+
     // Extract all paths with opacity
     auto paths = svg_detail::ExtractPaths(svgContent);
-    if (paths.empty()) return icon;
+    if (paths.empty()) {
+        icon.valid = !icon.textRuns.empty();   // 纯文字 SVG 也算有效
+        return icon;
+    }
 
     // Check if any path has non-default opacity, stroke or transform
     bool needLayers = false;
@@ -1723,6 +2185,69 @@ void Renderer::DrawSvgIcon(const SvgIcon& icon, const D2D1_RECT_F& rect,
     }
 
     ctx_->SetTransform(D2D1::Matrix3x2F::Identity());
+}
+
+// L75: 只解析文字 run (D2D 原生 SVG 路径用 —— D2D 画形状, 这里补文字).
+std::vector<SvgTextRun> Renderer::ParseSvgTextRuns(const std::string& svgContent) {
+    if (svgContent.empty()) return {};
+    return svg_detail::ExtractTextRuns(svgContent);
+}
+
+// L75: DirectWrite 渲染 SVG 文字 run. baseXf = SVG user-space → 屏幕 (跟形状同一个).
+void Renderer::DrawSvgTextRuns(const std::vector<SvgTextRun>& runs,
+                                const D2D1_MATRIX_3X2_F& baseXf) {
+    if (runs.empty() || !ctx_ || !dwFactory_) return;
+
+    D2D1_MATRIX_3X2_F saved;
+    ctx_->GetTransform(&saved);
+
+    for (const auto& run : runs) {
+        if (run.text.empty()) continue;
+        const wchar_t* fam = run.fontFamily.empty() ? theme::kFontFamily
+                                                     : run.fontFamily.c_str();
+        auto fmt = GetTextFormat(run.fontSize, fam);
+        if (!fmt) continue;
+
+        float maxW = run.maxWidth > 1.0f ? run.maxWidth : 100000.0f;
+        ComPtr<IDWriteTextLayout> layout;
+        if (FAILED(dwFactory_->CreateTextLayout(
+                run.text.c_str(), (UINT32)run.text.size(),
+                fmt.Get(), maxW, 100000.0f, &layout)) || !layout)
+            continue;
+        layout->SetWordWrapping(run.maxWidth > 1.0f ? DWRITE_WORD_WRAPPING_WRAP
+                                                    : DWRITE_WORD_WRAPPING_NO_WRAP);
+
+        DWRITE_TEXT_METRICS tm{};
+        layout->GetMetrics(&tm);
+
+        /* 多行 / 居中 / 右对齐: 把 layout 收窄到自然宽 + 设对齐, 让多行在块内
+         * 各自对齐 (否则 100000 宽框里 center 会跑偏). */
+        if (run.block || run.anchor != 0) {
+            layout->SetMaxWidth(tm.width + 1.0f);
+            layout->SetTextAlignment(run.anchor == 2 ? DWRITE_TEXT_ALIGNMENT_TRAILING
+                                                     : DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+
+        float ox = run.x, oy = run.y;
+        if (run.block) {
+            // foreignObject: 文字块围绕 (x,y)+transform 原点 水平 + 垂直居中.
+            ox = run.x - tm.width  / 2.0f;
+            oy = run.y - tm.height / 2.0f;
+        } else {
+            // <text>: SVG 的 y 是 baseline, DirectWrite 原点是 top → 上移一个 baseline.
+            if (run.anchor == 1)      ox = run.x - tm.width / 2.0f;
+            else if (run.anchor == 2) ox = run.x - tm.width;
+            DWRITE_LINE_METRICS lm{}; UINT32 lineCnt = 0;
+            if (SUCCEEDED(layout->GetLineMetrics(&lm, 1, &lineCnt)) && lineCnt >= 1)
+                oy = run.y - lm.baseline;
+        }
+
+        ctx_->SetTransform(run.transform * baseXf);
+        auto brush = GetBrush(run.color);
+        if (brush) ctx_->DrawTextLayout(D2D1::Point2F(ox, oy), layout.Get(), brush.Get());
+    }
+
+    ctx_->SetTransform(saved);
 }
 
 ID2D1StrokeStyle* Renderer::GetRoundStrokeStyle() {

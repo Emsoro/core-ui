@@ -83,6 +83,7 @@ namespace grey {
     constexpr D2D1_COLOR_F g94  = Rgb(0xF0, 0xF0, 0xF0);  // #f0f0f0
     constexpr D2D1_COLOR_F g96  = Rgb(0xF5, 0xF5, 0xF5);  // #f5f5f5
     constexpr D2D1_COLOR_F g98  = Rgb(0xFA, 0xFA, 0xFA);  // #fafafa
+    constexpr D2D1_COLOR_F g99  = Rgb(0xFC, 0xFC, 0xFC);  // #fcfcfc
 }
 
 constexpr D2D1_COLOR_F white = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -116,6 +117,7 @@ struct Colors {
     D2D1_COLOR_F statusBarText;       // neutralForeground3
     D2D1_COLOR_F contentBg;           // neutralBackground1
     D2D1_COLOR_F contentText;         // neutralForeground2
+    D2D1_COLOR_F elevatedBg;          // sidebar+content 布局的内容夹层色 (介于 windowBg 和 sidebarBg)
 
     // ---- Buttons ----
     D2D1_COLOR_F btnNormal;           // subtleBackground
@@ -179,8 +181,8 @@ struct Colors {
 // ============================================================================
 inline Colors MakeDark() {
     return {
-        // titleBarBg              — neutralBackground2
-        grey::g12,
+        // titleBarBg              — #292929 (= windowBg, GuoheView L43)
+        grey::g16,
         // titleBarText            — neutralForeground1
         white,
         // windowBg                — neutralBackground1
@@ -197,6 +199,8 @@ inline Colors MakeDark() {
         grey::g16,
         // contentText             — neutralForeground2
         grey::g84,
+        // elevatedBg              — #242424, 介于 windowBg (#292929) 和 sidebarBg (#1f1f1f)
+        grey::g14,
 
         // btnNormal               — subtleBackground (transparent)
         transparent,
@@ -283,8 +287,8 @@ inline Colors MakeDark() {
 // ============================================================================
 inline Colors MakeLight() {
     return {
-        // titleBarBg              — neutralBackground2
-        grey::g98,
+        // titleBarBg              — #ffffff (= windowBg, GuoheView L43)
+        white,
         // titleBarText            — neutralForeground1
         grey::g14,
         // windowBg                — neutralBackground1
@@ -301,6 +305,8 @@ inline Colors MakeLight() {
         white,
         // contentText             — neutralForeground2
         grey::g26,
+        // elevatedBg              — #fcfcfc, 介于 windowBg (#ffffff) 和 sidebarBg (#fafafa)
+        grey::g99,
 
         // btnNormal               — subtleBackground (transparent)
         transparent,

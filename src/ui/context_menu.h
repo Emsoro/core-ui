@@ -18,7 +18,9 @@ using ContextMenuPtr = std::shared_ptr<ContextMenu>;
  * 字段全删, 由 customContent (一棵完整 widget tree) 接管渲染. shortcut /
  * submenu / id / enabled / isSeparator 这些 menu 语义相关的留下. */
 struct MenuItem {
-    int id = 0;
+    int id = 0;                 // 数字 id (内部 hit-test/debug); 非数字 id 时 autoId
+    std::string  strId;         // 原始 id 字符串 (key 或数字串), C callback 用
+    std::vector<std::pair<std::string,std::string>> attrs;  // 全部静态属性 (含 id)
     std::wstring shortcut;
     bool enabled = true;
     bool isSeparator = false;
@@ -27,6 +29,19 @@ struct MenuItem {
      * (CSS cascade / reactive bindings / OnDraw / HitTest). separator
      * 时为 null. PageState::PopulateMenuItem 实例化并装入. */
     WidgetPtr customContent;
+};
+
+/* 一次菜单点击的载荷 — 点击时 heap-new, post 给父窗口 WM_APP+100, 回调读完
+ * delete (解决菜单 popup transient 的生命周期)。C API UiMenuItem 即指向它。
+ * 暴露点击项的 id 字符串 + 全部静态属性, 让宿主按 key / data-* 路由。 */
+struct MenuClickInfo {
+    std::string id;                                          // "id" attr (key 或数字串), 可空
+    std::vector<std::pair<std::string,std::string>> attrs;   // 该项全部静态属性 (含 id)
+    const char* Attr(const char* name) const {
+        if (!name) return nullptr;
+        for (const auto& kv : attrs) if (kv.first == name) return kv.second.c_str();
+        return nullptr;
+    }
 };
 
 class ContextMenu : public std::enable_shared_from_this<ContextMenu> {
@@ -41,6 +56,11 @@ public:
      * 调用方负责给一棵 widget tree, lib 负责 layout + render + hit-test.
      * shortcut 仍是 menu 框架渲染 (右对齐, 不跟 content widget tree 同色). */
     void AddItemContent(int id, const std::wstring& shortcut, WidgetPtr content);
+    /* 给最近 AddItemContent 的项补字符串 id + 全部属性 (反应式 menu 走声明式
+     * .uix 时, PageState::PopulateMenuItem 在 AddItemContent 后调)。供点击回调
+     * 暴露 key / data-* 给宿主。老 imperative 路径不调 → strId/attrs 空。 */
+    void SetLastItemMeta(std::string strId,
+                         std::vector<std::pair<std::string,std::string>> attrs);
     void AddSeparator();
     void AddSubmenu(WidgetPtr entryContent, ContextMenuPtr submenu);
     void SetEnabled(int id, bool enabled);
@@ -103,6 +123,9 @@ public:
 
     // Hit result after HandleMouseUp returns true
     int ClickedItemId() const { return clickedId_; }
+    // 点击项的字符串 id + 全部属性 (submenu 点击会沿链传播到 root)。
+    const std::string& ClickedItemStrId() const { return clickedStrId_; }
+    const std::vector<std::pair<std::string,std::string>>& ClickedItemAttrs() const { return clickedAttrs_; }
 
     // Geometry
     D2D1_RECT_F Bounds() const;
@@ -149,6 +172,8 @@ private:
     int hoveredIndex_ = -1;
     int openSubmenuIndex_ = -1;
     int clickedId_ = -1;
+    std::string  clickedStrId_;                                          // 点击项字符串 id (跟 clickedId_ 同步设)
+    std::vector<std::pair<std::string,std::string>> clickedAttrs_;       // 点击项全部属性
     D2D1_COLOR_F bgColor_ = {};
     bool hasBgColor_ = false;
     /* Build 69+ (L19): per-menu 圆角. -1 = 用 kCornerRadius 默认. 公共 API

@@ -600,6 +600,17 @@ void ApplySvgShapeAttr(SvgShape& s, const std::string& name, const std::string& 
 void SvgWidget::SetShapeProperty(size_t shapeIdx, const std::string& name, const std::string& value) {
     if (shapeIdx >= shapes_.size()) return;
     ApplySvgShapeAttr(shapes_[shapeIdx], name, value);
+    // 缓存反应式 binding 设的值, 供 recomputeShapes 重建 shape 后补回 (见 .h /
+    // ReapplyBoundAttrs). 否则 hover/press/focus 重建 shape 会丢掉这个值。
+    boundShapeAttrs_[shapeIdx][name] = value;
+}
+
+void SvgWidget::ReapplyBoundAttrs(size_t shapeIdx, SvgShape& s) const {
+    auto it = boundShapeAttrs_.find(shapeIdx);
+    if (it == boundShapeAttrs_.end()) return;
+    for (const auto& [name, value] : it->second) {
+        ApplySvgShapeAttr(s, name, value);
+    }
 }
 
 void SvgWidget::OnDraw(Renderer& r) {

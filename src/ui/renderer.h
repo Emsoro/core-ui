@@ -31,9 +31,46 @@ struct SvgPathLayer {
     D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();
 };
 
+/* L75: SVG 文字 run —— <text>/<tspan> 或 <foreignObject> 内嵌 HTML 文字.
+ * D2D ID2D1SvgDocument 只渲染形状 (shapes-only, 不画文字), core-ui 自己把文字
+ * 解析出来用 DirectWrite 叠加补渲 —— 跟形状走同一个 user→screen 变换, 保证
+ * 对齐 + 任意缩放矢量清晰. 覆盖 Mermaid (foreignObject) / draw.io / Graphviz
+ * (<text>) 等图表 SVG. */
+// L87: SVG 渐变 fill (linear/radial), 给 <text> 叠加渲染用.
+struct SvgGradientStop {
+    float        offset = 0.0f;                 // 0..1
+    D2D1_COLOR_F color  = D2D1::ColorF(0, 0, 0, 1);
+};
+struct SvgTextGradient {
+    bool  radial    = false;
+    bool  userSpace = false;                    // gradientUnits: false=objectBoundingBox(默认)
+    D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();  // gradientTransform
+    float x1 = 0, y1 = 0, x2 = 1, y2 = 0;       // linear 向量 (objectBB 默认水平 0→1)
+    float cx = 0.5f, cy = 0.5f, r = 0.5f;       // radial 中心/半径
+    std::vector<SvgGradientStop> stops;
+};
+
+struct SvgTextRun {
+    std::wstring      text;        // 已解码 (实体 + <br>/</p> → \n), 可多行
+    D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();  // 累积 <g> transform
+    float             x = 0.0f;    // user-space 锚点 (在 transform 之前的局部坐标)
+    float             y = 0.0f;
+    float             fontSize = 16.0f;
+    std::wstring      fontFamily;  // 空 / 通用名(sans-serif…) = 主题默认字体
+    DWRITE_FONT_WEIGHT fontWeight = DWRITE_FONT_WEIGHT_NORMAL;  // L87: font-weight
+    D2D1_COLOR_F      color = D2D1::ColorF(D2D1::ColorF::Black);
+    float             opacity = 1.0f;   // L87: 累积父 <g opacity> + 自身 (fill-)opacity
+    bool              hasGradient = false;  // L87: fill="url(#id)" 命中渐变
+    SvgTextGradient   gradient;             // L87: hasGradient 时有效
+    int               anchor = 0;  // text-anchor: 0=start 1=middle 2=end
+    float             maxWidth = 0.0f;  // >0 = 换行宽度 (foreignObject width)
+    bool              block = false;    // true = foreignObject (块级, 围绕 (x,y) 居中)
+};
+
 struct SvgIcon {
     ComPtr<ID2D1PathGeometry> geometry;  // combined (legacy, used if layers empty)
     std::vector<SvgPathLayer> layers;    // per-path with opacity
+    std::vector<SvgTextRun>   textRuns;  // L75: <text> / <foreignObject> 文字
     float viewBoxW = 24;
     float viewBoxH = 24;
     bool valid = false;
@@ -153,6 +190,14 @@ public:
     // SVG icon support
     SvgIcon ParseSvgIcon(const std::string& svgContent);
     void DrawSvgIcon(const SvgIcon& icon, const D2D1_RECT_F& rect, const D2D1_COLOR_F& color);
+    /* L75: 只解析 SVG 文字 run (不建 path 几何) —— 给 D2D 原生 SVG 路径用:
+     * D2D 画形状, 这个补文字. */
+    std::vector<SvgTextRun> ParseSvgTextRuns(const std::string& svgContent);
+    /* L75: DirectWrite 渲染文字 run. baseXf = SVG user-space → 屏幕 的变换
+     * (跟 DrawSvgDocument / DrawSvgIcon 同一个), 每个 run 再左乘自身累积 transform.
+     * 内部 save/restore 当前 RT transform. */
+    void DrawSvgTextRuns(const std::vector<SvgTextRun>& runs,
+                         const D2D1_MATRIX_3X2_F& baseXf);
 
     ID2D1DeviceContext* RT() { return ctx_.Get(); }
     /* ID2D1DeviceContext5（支持 CreateSvgDocument / DrawSvgDocument）。

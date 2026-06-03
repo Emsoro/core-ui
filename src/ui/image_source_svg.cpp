@@ -1,5 +1,6 @@
 #include "image_source.h"
 #include "renderer.h"
+#include "svg_style_inliner.h"
 #include <d2d1_3.h>
 #include <shlwapi.h>
 #include <windows.h>
@@ -16,8 +17,9 @@ namespace ui {
 
 class SvgSourceNative : public IImageSource {
 public:
-    SvgSourceNative(ComPtr<ID2D1SvgDocument> doc, int w, int h)
-        : doc_(std::move(doc)), w_(w), h_(h) {}
+    SvgSourceNative(ComPtr<ID2D1SvgDocument> doc, int w, int h,
+                    std::vector<SvgTextRun> textRuns)
+        : doc_(std::move(doc)), w_(w), h_(h), textRuns_(std::move(textRuns)) {}
 
     int  Width()  const override { return w_; }
     int  Height() const override { return h_; }
@@ -65,12 +67,16 @@ public:
         ctx5->SetTransform(xf);
 
         ctx5->DrawSvgDocument(doc_.Get());
+        /* L75: D2D ID2D1SvgDocument 不渲染 <text>/<foreignObject> 文字 (shapes-only)
+         * → DirectWrite 叠加补渲, 用同一个 xf 变换跟形状对齐. */
+        if (!textRuns_.empty()) r.DrawSvgTextRuns(textRuns_, xf);
         ctx5->SetTransform(old);
     }
 
 private:
     ComPtr<ID2D1SvgDocument> doc_;
     int w_, h_;
+    std::vector<SvgTextRun> textRuns_;   // L75: D2D 不画文字, 这里 DirectWrite 叠加
 };
 
 // ========= Fallback：用 Renderer::ParseSvgIcon，只支持 SVG 子集 =========
@@ -96,6 +102,20 @@ public:
         // 这里简化：用 DrawSvgIcon 的默认纯色绘制（这是 fallback，功能本来就打折扣）。
         auto color = D2D1::ColorF(D2D1::ColorF::Black);
         r.DrawSvgIcon(icon_, ctx.dest, color);
+        /* L75: 补文字 (同 DrawSvgIcon 的 viewBox→dest fit-contain 变换). */
+        if (!icon_.textRuns.empty()) {
+            float destW = ctx.dest.right - ctx.dest.left;
+            float destH = ctx.dest.bottom - ctx.dest.top;
+            if (destW > 0 && destH > 0 && icon_.viewBoxW > 0 && icon_.viewBoxH > 0) {
+                float sx = destW / icon_.viewBoxW, sy = destH / icon_.viewBoxH;
+                float scale = sx < sy ? sx : sy;
+                float offX = ctx.dest.left + (destW - icon_.viewBoxW * scale) / 2.0f;
+                float offY = ctx.dest.top  + (destH - icon_.viewBoxH * scale) / 2.0f;
+                auto xf = D2D1::Matrix3x2F::Scale(scale, scale) *
+                          D2D1::Matrix3x2F::Translation(offX, offY);
+                r.DrawSvgTextRuns(icon_.textRuns, xf);
+            }
+        }
     }
 
 private:
@@ -103,36 +123,23 @@ private:
     int w_ = 0, h_ = 0;
 };
 
-// ========= 文件读取（跨 MSVC/MinGW：Win32 API，避开 std::ifstream 宽字符不兼容）=========
-
-static std::string ReadFileUtf8(const std::wstring& path) {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return "";
-    LARGE_INTEGER sz;
-    if (!GetFileSizeEx(h, &sz) || sz.QuadPart <= 0 || sz.QuadPart > (1LL << 30)) {
-        CloseHandle(h); return "";
-    }
-    std::string buf((size_t)sz.QuadPart, '\0');
-    DWORD read = 0;
-    BOOL ok = ReadFile(h, buf.data(), (DWORD)sz.QuadPart, &read, nullptr);
-    CloseHandle(h);
-    if (!ok || read != (DWORD)sz.QuadPart) return "";
-    return buf;
-}
-
 // ========= 工厂 =========
 
 std::unique_ptr<IImageSource>
 CreateSvgSourceFromFile(const std::wstring& path, Renderer& r) {
+    /* L48 — 读一次文件 + 预处理 <style>+class 规则到 inline style. 处理后
+     * 的 xml 同时喂 D2D 原生路径和 SvgIcon fallback, 避免二次读盘 + 让 fallback
+     * 也享受 style 内联 (将来 ParseSvgIcon 支持 class 时一致). */
+    std::string xml = LoadSvgWithInlinedStyles(path);
+    if (xml.empty()) return nullptr;
+
     // 先试原生路径（Win10 1607+）
     if (auto* ctx5 = r.RT5()) {
         ComPtr<IStream> stream;
-        if (SUCCEEDED(SHCreateStreamOnFileEx(
-                path.c_str(),
-                STGM_READ | STGM_SHARE_DENY_WRITE,
-                FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &stream)))
-        {
+        stream.Attach(SHCreateMemStream(
+            reinterpret_cast<const BYTE*>(xml.data()),
+            static_cast<UINT>(xml.size())));
+        if (stream) {
             ComPtr<ID2D1SvgDocument> doc;
             // 初始 viewport 随意，Draw 时会改
             if (SUCCEEDED(ctx5->CreateSvgDocument(
@@ -160,15 +167,15 @@ CreateSvgSourceFromFile(const std::wstring& path, Renderer& r) {
                             D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &lh, sizeof(lh)))
                         && lh.value > 0) h = (int)lh.value;
                 }
-                return std::make_unique<SvgSourceNative>(doc, w, h);
+                /* L75: D2D 画形状; 文字另外解析出来 (D2D 拿不到), DirectWrite 叠加. */
+                return std::make_unique<SvgSourceNative>(
+                    doc, w, h, r.ParseSvgTextRuns(xml));
             }
         }
     }
 
-    // Fallback：读文件内容 → ParseSvgIcon
-    std::string content = ReadFileUtf8(path);
-    if (content.empty()) return nullptr;
-    SvgIcon icon = r.ParseSvgIcon(content);
+    // Fallback：复用预处理后的 xml → ParseSvgIcon
+    SvgIcon icon = r.ParseSvgIcon(xml);
     if (!icon.valid) return nullptr;
     return std::make_unique<SvgSourceFallback>(std::move(icon));
 }

@@ -346,6 +346,22 @@ public:
     virtual WidgetPtr TextColor(const D2D1_COLOR_F&) { return shared_from_this(); }
     virtual WidgetPtr Align(int)      { return shared_from_this(); }
 
+    // ---- Mount-phase transition gate (L45 / GuoheView L46) ----
+    // True after this widget has been painted to RT at least once. DrawTree
+    // (and every subclass override) sets it right after OnDraw. Used by
+    // PageState::ApplyBindingToWidget to decide between Immediate (snap) and
+    // animated setters: while a widget has never been painted, all reactive
+    // binding pushes go through Immediate so the page can mount in its final
+    // state without ".uix data() default → caller real value" transition. Once
+    // the user has actually seen a frame, subsequent reactive updates animate.
+    //
+    // Not reset on visibility flips (v-show off→on) or detach/reattach — the
+    // semantic is "has this widget ever been on screen". v-if rebuilds the
+    // widget instance entirely, so a fresh paintedOnce_=false naturally falls
+    // out without an explicit reset.
+    bool PaintedOnce() const { return paintedOnce_; }
+    void MarkPainted() { paintedOnce_ = true; }
+
     // ---- Virtual interface ----
     virtual void OnDraw(Renderer& r);
     virtual bool OnMouseMove(const MouseEvent& e);
@@ -394,6 +410,7 @@ public:
 protected:
     Widget* parent_ = nullptr;
     std::vector<WidgetPtr> children_;
+    bool paintedOnce_ = false;   // see PaintedOnce() / MarkPainted() above
 };
 
 // ---- Layout containers ----

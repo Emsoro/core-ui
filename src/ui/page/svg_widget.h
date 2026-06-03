@@ -99,6 +99,12 @@ public:
     // calls this when the bound expression changes.
     void SetShapeProperty(size_t shapeIdx, const std::string& name, const std::string& value);
 
+    // 把运行时反应式 binding (经 SetShapeProperty) 设过的属性值补回到 `s` 上。
+    // recomputeShapes (hover/press/focus 时从 static + CSS 重建 shape) 不含 Bind
+    // 属性, 会丢掉反应式 :fill/:stroke 等设的值; 重建后调本方法补回 (最高优先级,
+    // 覆盖 static/CSS), 否则 hover 一下反应式 SVG 颜色/几何就没了。无缓存则 no-op。
+    void ReapplyBoundAttrs(size_t shapeIdx, SvgShape& s) const;
+
     // Register a gradient defined in <defs>. The gradient is stored by id and
     // referenced from shape fill/stroke via "url(#id)".
     void AddGradient(SvgGradient g) { gradients_[g.id] = std::move(g); }
@@ -118,6 +124,11 @@ public:
 private:
     std::vector<SvgShape> shapes_;
     std::unordered_map<std::string, SvgGradient> gradients_;
+
+    // shapeIdx → (attr name → 最后由 SetShapeProperty 应用的值). 反应式 :attr
+    // binding 设值时同步缓存; recomputeShapes 重建 shape 后用 ReapplyBoundAttrs
+    // 把 bind 值补回, 避免 hover/state 重渲染丢掉反应式 SVG 属性。
+    std::unordered_map<size_t, std::unordered_map<std::string, std::string>> boundShapeAttrs_;
 };
 
 // Parse a single SVG-element attribute into a shape. Used by both the

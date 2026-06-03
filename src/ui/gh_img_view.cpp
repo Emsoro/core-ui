@@ -12,11 +12,12 @@
 
 #include "gh_img_view.h"
 #include "event.h"
+#include "svg_style_inliner.h"   /* L48 — <style>+class 预处理 */
 
 #include <algorithm>
 #include <cmath>
 #include <Windows.h>
-#include <shlwapi.h>     /* SHCreateStreamOnFileEx — SVG 加载 (L20) */
+#include <shlwapi.h>     /* SHCreateMemStream — SVG 加载 (L20 / L48) */
 
 namespace ui {
 
@@ -85,6 +86,7 @@ void GhImgViewWidget::Begin(const Info& info, Renderer& r) {
     previewW_ = previewH_ = 0;
     /* 切瓦块 source 前清 SVG 状态. */
     svgDoc_.Reset();
+    svgTextRuns_.clear();
     svgW_ = svgH_ = 0;
 
     /* Cache DPI scale for PickAutoLevel — 算物理像素密度需要 zoom 乘上
@@ -144,6 +146,8 @@ void GhImgViewWidget::SetTile(uint32_t level, uint32_t tx, uint32_t ty,
     auto bmp = r.CreateBitmapFromPixelsStraight(bgra, (int)tw, (int)th, (int)stride);
     if (!bmp) return;
 
+    // L48: 不再做 LRU evict — viewport trim 在 NotifyViewport 内做, 跟 viewport
+    // 边界严格绑定. SetTile 只负责装新 tile, 不主动 evict.
     Tile t;
     t.bmp = std::move(bmp);
     t.w   = tw;
@@ -152,10 +156,36 @@ void GhImgViewWidget::SetTile(uint32_t level, uint32_t tx, uint32_t ty,
     InvalidateAllWindows();
 }
 
+void GhImgViewWidget::TrimToViewport_(uint32_t active_level,
+                                       uint32_t visible_tx0, uint32_t visible_tx1,
+                                       uint32_t visible_ty0, uint32_t visible_ty1) {
+    // L48: 清掉 tiles_ 中 (1) 非 active_level 的全部 tile + (2) active_level
+    // 内但不在 viewport [tx0,tx1) × [ty0,ty1) 范围的 tile. 每个被清的 tile
+    // fire onTileEvicted, caller 同步自己端 pushed_tiles_ erase.
+    //
+    // 内存稳态 ≈ viewport 内 tile 数 × 256KB, 不随 zoom 历史累积. zoom out /
+    // pan 远 → trim → caller pushed 同步清 → 下次 viewport callback 重新 enqueue
+    // worker decode (单 tile 0.38ms × 4 worker 并发 ~10ms 不可感知).
+    for (auto it = tiles_.begin(); it != tiles_.end(); ) {
+        const TileKey& k = it->first;
+        const bool in_viewport = (k.level == active_level &&
+                                    k.tx >= visible_tx0 && k.tx < visible_tx1 &&
+                                    k.ty >= visible_ty0 && k.ty < visible_ty1);
+        if (in_viewport) { ++it; continue; }
+        if (onTileEvicted) {
+            onTileEvicted(k.level, k.tx, k.ty);
+        }
+        it = tiles_.erase(it);
+    }
+}
+
 void GhImgViewWidget::ClearLevel(uint32_t level) {
     for (auto it = tiles_.begin(); it != tiles_.end(); ) {
-        if (it->first.level == level) it = tiles_.erase(it);
-        else                          ++it;
+        if (it->first.level == level) {
+            it = tiles_.erase(it);
+        } else {
+            ++it;
+        }
     }
     InvalidateAllWindows();
 }
@@ -165,6 +195,7 @@ void GhImgViewWidget::Clear() {
     preview_.Reset();
     previewW_ = previewH_ = 0;
     svgDoc_.Reset();
+    svgTextRuns_.clear();
     svgW_ = svgH_ = 0;
     info_ = Info{};
     activeLevel_ = 0;
@@ -179,13 +210,17 @@ bool GhImgViewWidget::SetSvgFromFile(const std::wstring& path, Renderer& r) {
     auto* ctx5 = r.RT5();
     if (!ctx5) return false;   /* Win10 1607 前 D2D1DeviceContext5 不可用 */
 
+    /* L48 — 读文件 + <style>+class 预处理后喂 mem stream. D2D ID2D1SvgDocument
+     * 不识别 <style> 内 CSS 规则, Adobe Illustrator / Figma / Sketch 等设计
+     * 工具默认导出的 SVG (style block + class 引用) 不预处理会全图渲染纯黑. */
+    std::string xml = LoadSvgWithInlinedStyles(path);
+    if (xml.empty()) return false;
+
     Microsoft::WRL::ComPtr<IStream> stream;
-    if (FAILED(SHCreateStreamOnFileEx(path.c_str(),
-                                        STGM_READ | STGM_SHARE_DENY_WRITE,
-                                        FILE_ATTRIBUTE_NORMAL, FALSE,
-                                        nullptr, &stream))) {
-        return false;
-    }
+    stream.Attach(SHCreateMemStream(
+        reinterpret_cast<const BYTE*>(xml.data()),
+        static_cast<UINT>(xml.size())));
+    if (!stream) return false;
 
     Microsoft::WRL::ComPtr<ID2D1SvgDocument> doc;
     if (FAILED(ctx5->CreateSvgDocument(stream.Get(),
@@ -231,6 +266,8 @@ bool GhImgViewWidget::SetSvgFromFile(const std::wstring& path, Renderer& r) {
     svgDoc_  = std::move(doc);
     svgW_    = natW;
     svgH_    = natH;
+    /* L75: 解析 <text>/<foreignObject> 文字 (D2D 不画文字, OnDraw 里叠加). */
+    svgTextRuns_ = r.ParseSvgTextRuns(xml);
     info_ = Info{};
     info_.fullWidth   = natW;
     info_.fullHeight  = natH;
@@ -307,6 +344,11 @@ int GhImgViewWidget::RenderSvgToBgra(uint32_t target_w, uint32_t target_h,
     float sy = (float)out_h_v / (float)svgH_;
     ctx5->SetTransform(D2D1::Matrix3x2F::Scale(sx, sy));
     ctx5->DrawSvgDocument(svgDoc_.Get());
+    /* L75: D2D 不画 <text>/<foreignObject> 文字 → DirectWrite 叠加 (同 OnDraw).
+     * 离屏 bitmap 是当前 target, 用同一 Scale 变换. 鸟瞰图/缩略图也要文字, 否则
+     * 主视图有字、minimap 没字, 不一致. */
+    if (!svgTextRuns_.empty())
+        r.DrawSvgTextRuns(svgTextRuns_, D2D1::Matrix3x2F::Scale(sx, sy));
 
     HRESULT hr = ctx5->EndDraw();
     ctx5->SetTarget(oldTarget.Get());
@@ -363,6 +405,25 @@ void GhImgViewWidget::SetZoom(float z) {
     if (zoom_ == z) return;
     zoom_ = z;
     if (autoLevel_) SwitchLevel(PickAutoLevel());
+    ConstrainPan();
+    NotifyViewport();
+    InvalidateAllWindows();
+}
+
+/* L47 follow-up: 之前 SetPan 是 .h inline 单纯赋值 panX_/Y_, 没 fire
+ * NotifyViewport — 跟 SetZoom 不对称. caller 调 ui_gh_img_view_set_pan
+ * (典型场景 minimap click 切换显示区域) 后 viewport callback 不 fire,
+ * caller 不知道要 push_visible_tiles_ 给新可见区, OnDraw fallback 显
+ * preview / 老 level → 用户看到模糊, 要点击画布触发 OnMouseMove 才
+ * fire callback 才清晰. 修: 跟 SetZoom 同款 fire NotifyViewport +
+ * InvalidateAllWindows. ConstrainPan 也跟 SetZoom 路径对齐.
+ *
+ * 早 return 优化: (x, y) 等于当前 pan 时跳过 — caller 端可能反复调
+ * (例如 minimap drag 时连续 set_pan), 避免无效 callback. */
+void GhImgViewWidget::SetPan(float x, float y) {
+    if (panX_ == x && panY_ == y) return;
+    panX_ = x;
+    panY_ = y;
     ConstrainPan();
     NotifyViewport();
     InvalidateAllWindows();
@@ -449,6 +510,17 @@ void GhImgViewWidget::OnDraw(Renderer& r) {
 
     if (info_.fullWidth == 0 || info_.fullHeight == 0) return;
 
+    // L48 followup: rect 变化 (典型 window resize 让 parent layout 重 size
+     // widget) 自动 fire NotifyViewport, caller 不需要在 resize handler 里
+     // 手动 invalidate viewport. visible tile 范围 = f(rect, zoom, pan), rect
+     // 变 → visible 变 → 需要 push 新 viewport tile.
+    if (rect.left   != lastNotifiedRect_.left   ||
+        rect.top    != lastNotifiedRect_.top    ||
+        rect.right  != lastNotifiedRect_.right  ||
+        rect.bottom != lastNotifiedRect_.bottom) {
+        NotifyViewport();   // 内部 set lastNotifiedRect_ = rect 防重 fire
+    }
+
     // 视觉 AABB (rotation 应用后的可见框) 做早期剔除. logical dest 给 tile
     // 算位置用 (preview/tile dest 在未旋转坐标系里, D2D transform 完成旋转).
     D2D1_RECT_F visual = ComputeVisualDestRect();
@@ -489,6 +561,9 @@ void GhImgViewWidget::OnDraw(Renderer& r) {
                     old;
                 ctx5->SetTransform(xf);
                 ctx5->DrawSvgDocument(svgDoc_.Get());
+                /* L75: D2D 不画 <text>/<foreignObject> 文字 → DirectWrite 叠加补渲
+                 * (同一 xf 变换跟形状对齐, zoom/pan/rotation 一致). */
+                if (!svgTextRuns_.empty()) r.DrawSvgTextRuns(svgTextRuns_, xf);
                 ctx5->SetTransform(old);
             }
         }
@@ -520,7 +595,11 @@ void GhImgViewWidget::OnDraw(Renderer& r) {
         float pscale = ps.width > 0
             ? (dest.right - dest.left) / static_cast<float>(ps.width)
             : 1.0f;
-        r.DrawBitmapHQ(preview_.Get(), dest, 1.0f, PickInterp(pscale));
+        // antialias_=false 且上采 (pscale >= 1) → NEAREST 像素清晰; 否则平滑.
+        auto pinterp = (!antialias_ && pscale >= 1.0f)
+            ? D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+            : PickInterp(pscale);
+        r.DrawBitmapHQ(preview_.Get(), dest, 1.0f, pinterp);
     }
 
     // 2) 多级金字塔：从最粗到最细，每级把已加载的可见瓦块画上去。
@@ -584,7 +663,10 @@ void GhImgViewWidget::DrawLevel(Renderer& r, uint32_t level, const D2D1_RECT_F& 
     // Interpolation: 大幅下采 (scale < 0.5) 退 HQ_LINEAR 避免 cubic 振铃
     // 出色边. 适度缩放 / 上采保持 HQ_CUBIC. scale 局部变量已是 screen-per-
     // source-px, 见上面 LevelToScreenScale * zoom_.
-    auto interp = PickInterp(scale);
+    // antialias_=false 且上采 (scale >= 1) → NEAREST 像素清晰; 否则平滑.
+    auto interp = (!antialias_ && scale >= 1.0f)
+        ? D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+        : PickInterp(scale);
     for (int ty = ty0; ty < ty1; ++ty) {
         for (int tx = tx0; tx < tx1; ++tx) {
             auto it = tiles_.find(TileKey{level, (uint32_t)tx, (uint32_t)ty});
@@ -611,10 +693,30 @@ bool GhImgViewWidget::OnMouseDown(const MouseEvent& e) {
 
 bool GhImgViewWidget::OnMouseMove(const MouseEvent& e) {
     if (!dragging_) return false;
+    // drag 期间 fire 基类 onMouseMoveHook 让宿主观察拖动 (实现"图片拖出"等
+    // 自定义手势). 窗口的 pressed 分支直接调本方法、不 fire hook (只有 hover
+    // 路径 fire), 故在此补 fire, 否则宿主在 drag 期间收不到 move.
+    // 宿主若在 hook 内发起 DoDragDrop, 其夺鼠标 capture → WM_CAPTURECHANGED →
+    // CancelMouseCapture → 本 widget OnMouseUp → dragging_=false; DoDragDrop
+    // 返回后下面复检 dragging_ 为假 → 不再 pan (拖出后图不被 pan 走).
+    if (onMouseMoveHook) onMouseMoveHook(e);
+    if (!dragging_) return true;
     panX_ = dragPanX_ + (e.x - dragStartX_);
     panY_ = dragPanY_ + (e.y - dragStartY_);
     ConstrainPan();
-    NotifyViewport();
+    /* L47 follow-up: drag 期间完全不 fire NotifyViewport, drag 结束 OnMouseUp
+     * 才 fire 一次精解. 之前实测节流 100ms 也不够 — drag 跨越 tile 数决定
+     * 总 enqueue 量, 不取决于 callback fire 频率. 1 秒 drag 实测 234 tile
+     * decode + set_tile (UI 线程 D2D CreateBitmap ~1-2ms/tile = ~470ms 阻塞) →
+     * 用户感知卡.
+     *
+     * drag 期间 OnDraw 仍跟随 pan 渲染 cache 中已有的 tile (DrawLevel pyramid
+     * fallback), 视觉是 "preview 模糊跟着 pan, drag 结束才精解新区域" —
+     * 跟浏览器 / Photoshop drag 大图体验一致, 不卡 UI. tile cache 在 drag
+     * 期间也不被打扰 (无新 SetTile, 无 evict), 旧 viewport 内 tile 保留.
+     *
+     * 仍 InvalidateAllWindows 让 D2D 重绘新 pan 后的 viewport (用现有 tile +
+     * preview). */
     InvalidateAllWindows();
     return true;
 }
@@ -622,11 +724,19 @@ bool GhImgViewWidget::OnMouseMove(const MouseEvent& e) {
 bool GhImgViewWidget::OnMouseUp(const MouseEvent& /*e*/) {
     if (!dragging_) return false;
     dragging_ = false;
+    /* L47 follow-up: drag 结束强 fire NotifyViewport — drag 期间 OnMouseMove
+     * 完全不 fire callback (避免 tile enqueue 风暴, 跨多 tile 边界拖动会让
+     * UI 线程 set_tile 卡几百 ms). drag 释放后这条 fire 让 caller 拿到最终
+     * viewport, push_visible_tiles_ 精解新可见区 tile, 画面立即清晰. */
+    NotifyViewport();
     return true;
 }
 
 bool GhImgViewWidget::OnMouseWheel(const MouseEvent& e) {
     if (!Contains(e.x, e.y)) return false;
+    // wheelZoomEnabled_=false: 不内部缩放, 让宿主 (ui_widget_on_mouse_wheel
+    // hook 已在分发开头无条件 fire) 自行决定滚轮行为 (如切图). 返 false = 未消费.
+    if (!wheelZoomEnabled_) return false;
     float factor = (e.delta > 0) ? 1.25f : 1.0f / 1.25f;
     SetZoomAround(zoom_ * factor, e.x, e.y);
     return true;
@@ -812,6 +922,15 @@ void GhImgViewWidget::NotifyViewport() {
         vp.visibleTx1 = (uint32_t)tx1;
         vp.visibleTy1 = (uint32_t)ty1;
     }
+
+    // L48: 主动 trim viewport 外的 tile + 非 active level 的全部 tile.
+    // 每个被清的 tile fire onTileEvicted → caller 同步 pushed_tiles_ erase.
+    // 跟用户记忆的"按区加载内存小"行为对齐, 内存稳态 = viewport tile × 256KB.
+    TrimToViewport_(vp.activeLevel, vp.visibleTx0, vp.visibleTx1,
+                                     vp.visibleTy0, vp.visibleTy1);
+
+    // L48 followup: 记 rect, OnDraw 比较防重 fire (resize-detect 用).
+    lastNotifiedRect_ = rect;
 
     onViewportChanged(vp);
 }

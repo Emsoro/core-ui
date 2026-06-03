@@ -89,7 +89,9 @@ struct CompiledMenuItem {
      * 子节点 (svg / label / div / button / ...) 都按普通 widget 编译, 走
      * 完整 reactive binding 路径. 给视觉自由度 + 反应式正交性 + 砍掉所有
      * "static / bound 双路径" heuristic. */
-    int          itemId = 0;            // 数字 id, ContextMenu callback 用来识别
+    int          itemId = 0;            // 数字 id (内部 hit-test/debug/onClick-map); 非数字 id 时 autoId 兜底
+    std::string  strId;                 // 原始 id 字符串 (key 如 "cmd_delete" 或数字串 "1000"), C callback 用
+    std::vector<std::pair<std::string,std::string>> attrs;  // <menuitem> 全部静态属性 (含 id), callback 可读
     std::string  shortcut;              // 静态 shortcut 显示文本 (例 "Ctrl+S")
     std::string  onClick;               // 触发时调用的 JS method 名
     bool         separator = false;     // true → <separator/>

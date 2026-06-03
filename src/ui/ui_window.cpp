@@ -761,13 +761,61 @@ LRESULT UiWindowImpl::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         CloseMenu();
         break;
 
-    case WM_SIZING:
+    case WM_SIZING: {
         // 收到 WM_SIZING 说明是 resize，不是纯移动
         if (!isResizing_) {
             isResizing_ = true;
             ReleaseDragCache();  // 清除可能已创建的缓存
         }
+        /* L57: aspect ratio lock — borderless 看图器 enter 时 SetAspectLock(image_w, image_h),
+         * 用户拖窗任意边/角时这里按比例修正 RECT, Win32 把修正后的 RECT 当 user
+         * 实际拖的 size, image 永远严格填满 widget = window. */
+        if (aspectLockW_ > 0 && aspectLockH_ > 0) {
+            RECT* r = reinterpret_cast<RECT*>(lParam);
+            int w = r->right - r->left;
+            int h = r->bottom - r->top;
+            if (w <= 0 || h <= 0) return TRUE;
+            const double aspect = (double)aspectLockW_ / (double)aspectLockH_;
+            switch (wParam) {
+                case WMSZ_LEFT:
+                case WMSZ_RIGHT:
+                    /* 拖横向 → 按 w 算 h, 调整 bottom (保留 top, 朝下扩) */
+                    r->bottom = r->top + (int)((double)w / aspect + 0.5);
+                    break;
+                case WMSZ_TOP:
+                case WMSZ_BOTTOM:
+                    /* 拖纵向 → 按 h 算 w, 调整 right (保留 left, 朝右扩) */
+                    r->right = r->left + (int)((double)h * aspect + 0.5);
+                    break;
+                case WMSZ_TOPLEFT:
+                case WMSZ_TOPRIGHT:
+                case WMSZ_BOTTOMLEFT:
+                case WMSZ_BOTTOMRIGHT: {
+                    /* 拖角 → 按拖动幅度大的那边算另一边. user 拖角时直觉是
+                     * "整个矩形跟着鼠标走", 哪边离 aspect 更远就以那边为主. */
+                    const double cur_aspect = (double)w / (double)h;
+                    if (cur_aspect > aspect) {
+                        int newH = (int)((double)w / aspect + 0.5);
+                        if (wParam == WMSZ_TOPLEFT || wParam == WMSZ_TOPRIGHT)
+                            r->top = r->bottom - newH;
+                        else
+                            r->bottom = r->top + newH;
+                    } else {
+                        int newW = (int)((double)h * aspect + 0.5);
+                        if (wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
+                            r->left = r->right - newW;
+                        else
+                            r->right = r->left + newW;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+            return TRUE;
+        }
         break;
+    }
 
     case WM_MOVING:
         /* 强制 DWM 同步合成，消除拖动果冻延迟 */
@@ -824,6 +872,12 @@ LRESULT UiWindowImpl::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         OnMouseDown((float)GET_X_LPARAM(lParam), (float)GET_Y_LPARAM(lParam)); return 0;
     case WM_LBUTTONUP:
         OnMouseUp((float)GET_X_LPARAM(lParam), (float)GET_Y_LPARAM(lParam)); return 0;
+    case WM_CAPTURECHANGED:
+        // 鼠标 capture 被夺走 (DoDragDrop 起拖 / 系统). press 中的 widget 收不到
+        // WM_LBUTTONUP, 复位它避免卡在 drag 态. CancelMouseCapture 自守 pressedWidget_
+        // 为空时 no-op (正常 ReleaseCapture 流程已先清空, 不会重复触发).
+        CancelMouseCapture();
+        return 0;
     case WM_LBUTTONDBLCLK:
         // Win32 with CS_DBLCLKS replaces the second WM_LBUTTONDOWN of a
         // rapid double-click with WM_LBUTTONDBLCLK. Without this branch
@@ -840,9 +894,12 @@ LRESULT UiWindowImpl::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         if (wParam == kTooltipTimerId) {
             KillTimer(hwnd_, kTooltipTimerId);
             tooltipTimerId_ = 0;
-            if (hoveredWidget_ && !hoveredWidget_->tooltip.empty() && !tooltipVisible_) {
+            // 沿父链上溯取 tooltip owner (同 OnMouseMove 调度处, L72).
+            Widget* tipOwner = hoveredWidget_;
+            while (tipOwner && tipOwner->tooltip.empty()) tipOwner = tipOwner->Parent();
+            if (tipOwner && !tooltipVisible_) {
                 tooltipVisible_ = true;
-                tooltipWidget_ = hoveredWidget_;
+                tooltipWidget_ = tipOwner;
                 tooltipX_ = mouseX_;
                 tooltipY_ = mouseY_;
                 Invalidate();
@@ -1175,10 +1232,11 @@ LRESULT UiWindowImpl::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_ERASEBKGND: return 1;
 
     case WM_APP + 100: {
-        // Menu item clicked (from popup window)
-        int itemId = (int)wParam;
+        // Menu item clicked. LPARAM = heap MenuClickInfo* (id + 全部属性), 读完 delete.
+        auto* info = reinterpret_cast<MenuClickInfo*>(lParam);
         activeMenu_ = nullptr;  // menu already closed itself
-        if (onMenuItemClick) onMenuItemClick(itemId);
+        if (onMenuItemClick && info) onMenuItemClick(info);
+        delete info;
         Invalidate();
         return 0;
     }
@@ -1244,6 +1302,28 @@ LRESULT UiWindowImpl::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_NCLBUTTONDBLCLK:
             if (wParam == HTCAPTION) {
                 ShowWindow(hwnd_, maximized_ ? SW_RESTORE : SW_MAXIMIZE);
+                return 0;
+            }
+            break;
+        case WM_NCRBUTTONUP:
+            /* L53: HTCAPTION 区域右键 → 走 onRightClick (widget tree
+             * 的右键派发, 例如 WireSubtreeMenus 弹 app context menu),
+             * 不走 DefWindowProc 的系统菜单 (Move/Size/Minimize/Close).
+             *
+             * 配合 dragWindow ancestor walk (上面 OnNcHitTest 改动 1) —
+             * 画布可拖窗 + 画布右键弹 app 菜单 这对组合拳是 EnableCanvasMode
+             * 的核心 UX, 缺一边 (右键卡死 / 拖不动) 都没法用.
+             *
+             * 后向兼容: onRightClick 未设 (典型 lib demo / 老应用) 时
+             * fall-through DefWindowProc, titlebar 右键仍弹系统菜单, 老
+             * 行为不变. */
+            if (wParam == HTCAPTION && onRightClick) {
+                POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                ScreenToClient(hwnd_, &pt);
+                float dx = (float)pt.x / dpiScale_;
+                float dy = (float)pt.y / dpiScale_;
+                onRightClick(dx, dy);
+                Invalidate();
                 return 0;
             }
             break;
@@ -1572,11 +1652,16 @@ void UiWindowImpl::OnMouseMove(float x, float y) {
             }
             hoveredWidget_ = hit;
 
-            // Tooltip: reset on widget change, schedule timer for delayed show
+            // Tooltip: reset on widget change, schedule timer for delayed show.
+            // 沿父链上溯找最近一个有 tooltip 的祖先 (跟 hover 状态传播 + cursor
+            // 继承一致) —— 容器 widget set_tooltip 后, hover 其内部子 widget
+            // (如图标按钮的 svg 子级) 也能弹 (L72).
             tooltipVisible_ = false;
             tooltipWidget_ = nullptr;
             if (tooltipTimerId_) { KillTimer(hwnd_, tooltipTimerId_); tooltipTimerId_ = 0; }
-            if (hit && !hit->tooltip.empty()) {
+            Widget* tipOwner = hit;
+            while (tipOwner && tipOwner->tooltip.empty()) tipOwner = tipOwner->Parent();
+            if (tipOwner) {
                 hoverStartTick_ = GetTickCount();
                 tooltipTimerId_ = SetTimer(hwnd_, kTooltipTimerId, kTooltipDelayMs, nullptr);
             }
@@ -1785,6 +1870,26 @@ void UiWindowImpl::OnMouseDown(float x, float y) {
         hit->OnMouseDown(e);
     }
     UpdateCaretBlinkTimer();
+    Invalidate();
+}
+
+void UiWindowImpl::CancelMouseCapture() {
+    // capture 被外部夺走 → press 中的 widget 不会再收到 WM_LBUTTONUP. 等价一次
+    // "取消": 复位 pressedWidget_ + widget 内部 drag 状态, 但不 fire onClick
+    // (不是真正的点击释放). 不调 ReleaseCapture — capture 已易主.
+    if (!pressedWidget_) return;
+    WidgetPtr keepAlive = pressedWidget_->shared_from_this();
+    Widget* w = pressedWidget_;
+    pressedWidget_ = nullptr;
+    w->pressed = false;
+    w->RefreshCssState();
+    // 让 widget 复位自身 drag 态 (gh_img_view dragging_ / slider / scrollview 等).
+    // 走到这里的 pressedWidget_ 必是 SetCapture 过的拖拽类 widget, 其 OnMouseUp
+    // 无 onClick 自触发语义, 安全. 坐标无意义 (拖拽类 OnMouseUp 不读坐标).
+    MouseEvent e{0.0f, 0.0f, 0, false};
+    if (w->onMouseUpHook) w->onMouseUpHook(e);
+    w->OnMouseUp(e);
+    SetCursor(LoadCursor(nullptr, IDC_ARROW));
     Invalidate();
 }
 
@@ -2143,11 +2248,25 @@ LRESULT UiWindowImpl::OnNcHitTest(int sx, int sy) {
         auto* hit = root_->HitTest(x, y);
         if (hit && hit != root_.get()) {
             if (dynamic_cast<TitleBarWidget*>(hit)) return HTCAPTION;
-            /* dragWindow 属性：任意 widget 都能标记为"点击即拖动窗口"，
-             * 无边框画布模式下可以给根 Panel 打上这个标让整个画布可拖。
-             * 注意 HitTest 返回的是最深层子节点，所以内部的 Button 等
-             * 交互控件不会被波及（除非它们自己也标了 dragWindow）。 */
-            if (hit->dragWindow) return HTCAPTION;
+            /* dragWindow 属性沿 parent chain 向上查 — L53 修复:
+             *
+             * 1.2.0 引入 EnableCanvasMode 把 dragWindow=true 设在 root_ 上,
+             * 期望 "整个画布可拖". 但 HitTest 走深度优先返叶子, 只检查
+             * hit 自己的 dragWindow → 当 root 有交互子控件 (gh_img_view /
+             * image_view / 普通 Panel) 时永远不会命中 root_, "整个画布可拖"
+             * 等于零. 图片查看器等典型场景 (lib 自己 changelog 里点名的)
+             * 用不了.
+             *
+             * 改成 ancestor walk: chain 上任一节点 dragWindow=true 即返
+             * HTCAPTION. EnableCanvasMode 的 root_.dragWindow=true 现在
+             * 真正等价于 "整个画布可拖", 符合 API 命名直觉.
+             *
+             * 安全: 1.2.0 至今 dragWindow 的唯一真实 setter 是 EnableCanvasMode
+             * (作用 root), 没有外部 caller 自己设过中间节点, 不存在 "中间节点
+             * dragWindow=true + 叶子是交互控件" 的现存用法被破坏. */
+            for (Widget* w = hit; w != nullptr; w = w->Parent()) {
+                if (w->dragWindow) return HTCAPTION;
+            }
             return HTCLIENT;
         }
     }

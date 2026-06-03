@@ -42,6 +42,13 @@ void ContextMenu::AddItemContent(int id, const std::wstring& shortcut,
     items_.push_back(std::move(item));
 }
 
+void ContextMenu::SetLastItemMeta(std::string strId,
+                                   std::vector<std::pair<std::string,std::string>> attrs) {
+    if (items_.empty()) return;
+    items_.back().strId = std::move(strId);
+    items_.back().attrs = std::move(attrs);
+}
+
 void ContextMenu::AddSeparator() {
     MenuItem item;
     item.isSeparator = true;
@@ -214,9 +221,12 @@ bool ContextMenu::SimulateClickIndex(int index) {
     const MenuItem& it = items_[index];
     if (it.isSeparator || !it.enabled) return false;
     clickedId_ = it.id;
-    // 复刻 PopupWndProc 里 WM_LBUTTONUP 的分派路径：把 item id 回传给父窗口
+    clickedStrId_ = it.strId;
+    clickedAttrs_ = it.attrs;
+    // 复刻 PopupWndProc 里 WM_LBUTTONUP 的分派路径：把 item id + 属性载荷回传父窗口
     if (parentHwnd_) {
-        PostMessageW(parentHwnd_, WM_APP + 100, (WPARAM)it.id, 0);
+        PostMessageW(parentHwnd_, WM_APP + 100, (WPARAM)it.id,
+                     (LPARAM)new MenuClickInfo{it.strId, it.attrs});
     }
     Close();
     return true;
@@ -279,9 +289,12 @@ bool ContextMenu::SimulateClickPath(const int* path, int depth) {
     const MenuItem& leaf = cur->items_[leafIdx];
     if (leaf.isSeparator || !leaf.enabled) return false;
     cur->clickedId_ = leaf.id;
+    cur->clickedStrId_ = leaf.strId;
+    cur->clickedAttrs_ = leaf.attrs;
     // 回传给 ROOT 菜单的 parentHwnd（主窗口）。
     if (parentHwnd_) {
-        PostMessageW(parentHwnd_, WM_APP + 100, (WPARAM)leaf.id, 0);
+        PostMessageW(parentHwnd_, WM_APP + 100, (WPARAM)leaf.id,
+                     (LPARAM)new MenuClickInfo{leaf.strId, leaf.attrs});
     }
     Close();
     return true;
@@ -404,9 +417,10 @@ LRESULT CALLBACK ContextMenu::PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
         float y = (float)GET_Y_LPARAM(lParam) / scale;
         if (self->HandleMouseUp(x, y)) {
             int clickedId = self->ClickedItemId();
-            // Post message to parent so it can handle the callback
+            // Post message to parent so it can handle the callback (id + 属性载荷)
             if (clickedId >= 0 && self->parentHwnd_) {
-                PostMessage(self->parentHwnd_, WM_APP + 100, (WPARAM)clickedId, 0);
+                PostMessage(self->parentHwnd_, WM_APP + 100, (WPARAM)clickedId,
+                            (LPARAM)new MenuClickInfo{self->clickedStrId_, self->clickedAttrs_});
             }
             self->Close();
             // 如果本身是子菜单 popup（parentMenu_ 非空），沿链向上关闭父菜单，
@@ -820,6 +834,8 @@ bool ContextMenu::HandleMouseUp(float x, float y) {
             bool handled = sub->HandleMouseUp(x, y);
             if (handled && sub->ClickedItemId() >= 0) {
                 clickedId_ = sub->ClickedItemId();
+                clickedStrId_ = sub->clickedStrId_;     // 沿链向上传播 id+属性
+                clickedAttrs_ = sub->clickedAttrs_;
                 Close();
                 return true;
             }
@@ -832,6 +848,8 @@ bool ContextMenu::HandleMouseUp(float x, float y) {
         auto& item = items_[hit];
         if (!item.isSeparator && !item.submenu && item.enabled) {
             clickedId_ = item.id;
+            clickedStrId_ = item.strId;
+            clickedAttrs_ = item.attrs;
             Close();
             return true;
         }

@@ -310,7 +310,19 @@ UI_API void ui_window_on_menu(UiWindow win, UiMenuCallback cb, void* userdata) {
     if (!w) return;
     if (!cb) { w->onMenuItemClick = nullptr; return; }
     uint64_t id = win;
-    w->onMenuItemClick = [cb, userdata, id](int itemId) { cb(id, itemId, userdata); };
+    w->onMenuItemClick = [cb, userdata, id](const ui::MenuClickInfo* info) {
+        cb(id, static_cast<UiMenuItem>(info), userdata);
+    };
+}
+
+UI_API const char* ui_menu_item_id(UiMenuItem item) {
+    auto* info = static_cast<const ui::MenuClickInfo*>(item);
+    return (info && !info->id.empty()) ? info->id.c_str() : nullptr;
+}
+
+UI_API const char* ui_menu_item_attr(UiMenuItem item, const char* name) {
+    auto* info = static_cast<const ui::MenuClickInfo*>(item);
+    return info ? info->Attr(name) : nullptr;
 }
 
 UI_API void ui_window_on_right_click(UiWindow win, UiRightClickCallback cb, void* userdata) {
@@ -1083,6 +1095,22 @@ UI_API uint32_t ui_gh_img_view_get_active_level(UiWidget w) {
     auto* gv = As<ui::GhImgViewWidget>(w);
     return gv ? gv->ActiveLevel() : 0u;
 }
+UI_API void ui_gh_img_view_set_antialias(UiWidget w, int on) {
+    auto* gv = As<ui::GhImgViewWidget>(w);
+    if (gv) gv->SetAntialias(on != 0);
+}
+UI_API int ui_gh_img_view_get_antialias(UiWidget w) {
+    auto* gv = As<ui::GhImgViewWidget>(w);
+    return (gv && gv->Antialias()) ? 1 : 0;
+}
+UI_API void ui_gh_img_view_set_wheel_zoom_enabled(UiWidget w, int on) {
+    auto* gv = As<ui::GhImgViewWidget>(w);
+    if (gv) gv->SetWheelZoomEnabled(on != 0);
+}
+UI_API int ui_gh_img_view_get_wheel_zoom_enabled(UiWidget w) {
+    auto* gv = As<ui::GhImgViewWidget>(w);
+    return (gv && gv->WheelZoomEnabled()) ? 1 : 0;
+}
 
 UI_API float ui_gh_img_view_get_zoom(UiWidget w) {
     auto* gv = As<ui::GhImgViewWidget>(w);
@@ -1147,6 +1175,19 @@ UI_API void ui_gh_img_view_on_viewport(UiWidget w,
         out.visible_tx1  = vp.visibleTx1;
         out.visible_ty1  = vp.visibleTy1;
         cb(apiHandle, &out, userdata);
+    };
+}
+
+// L48: tile evict callback — NotifyViewport trim viewport 外 tile 时 fire,
+// caller 同步自己端 pushed_tiles_ erase.
+UI_API void ui_gh_img_view_on_tile_evicted(UiWidget w,
+                                            UiGhImgViewTileEvictedCallback cb,
+                                            void* userdata) {
+    auto* gv = As<ui::GhImgViewWidget>(w);
+    if (!gv) return;
+    UiWidget apiHandle = w;
+    gv->onTileEvicted = [cb, userdata, apiHandle](uint32_t level, uint32_t tx, uint32_t ty) {
+        if (cb) cb(apiHandle, level, tx, ty, userdata);
     };
 }
 
@@ -2543,6 +2584,11 @@ UI_API void ui_window_resize_with_anchor(UiWindow win,
 UI_API void ui_window_enable_canvas_mode(UiWindow win, int enable) {
     auto* wi = Win(win); if (!wi) return;
     wi->EnableCanvasMode(enable != 0);
+}
+
+UI_API void ui_window_set_aspect_lock(UiWindow win, int ratio_w, int ratio_h) {
+    auto* wi = Win(win); if (!wi) return;
+    wi->SetAspectLock(ratio_w, ratio_h);
 }
 
 // ---- Font / Text rendering (since 1.3.0) ----

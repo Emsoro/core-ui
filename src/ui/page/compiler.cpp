@@ -411,12 +411,13 @@ void CompileElement(CompilerCtx& ctx,
                  *   v-if / v-show / v-for — 同 widget 标准 */
                 for (const auto& a : c.attrs) {
                     if (a.kind == ui::uix::AttrKind::Static) {
+                        mi.attrs.push_back({a.name, a.rawValue});  // 捕获全部静态属性 → callback 可读
                         if (a.name == "id") {
+                            mi.strId = a.rawValue;                 // 字符串 id (key 如 "cmd_delete" 或数字串)
+                            /* 数字 id 时也填 int (内部 hit-test/debug); 非数字 key
+                             * 留 itemId=0, 下面 autoId 兜底。不再报错。 */
                             try { mi.itemId = std::stoi(a.rawValue); }
-                            catch (...) {
-                                ctx.out->errors.push_back(
-                                    "<menuitem id='" + a.rawValue + "'>: id must be integer");
-                            }
+                            catch (...) {}
                         }
                         else if (a.name == "shortcut") mi.shortcut = a.rawValue;
                         else if (a.name == "onclick")  mi.onClick  = a.rawValue;
@@ -625,15 +626,18 @@ void CompileElement(CompilerCtx& ctx,
     if (isSelect) {
         if (auto* cb = dynamic_cast<ComboBoxWidget*>(w.get())) {
             std::vector<std::wstring> items;
+            std::vector<std::string>  i18nKeys;   // L83: per-option i18n key ("" = literal)
             for (const auto& c : node.children) {
                 if (c->kind != ui::uix::NodeKind::Element) continue;
                 if (c->tag != "option") continue;
                 // Read first text child of the <option>
+                std::string  raw;        // narrow source (for @key detection)
                 std::wstring wtext;
                 for (const auto& oc : c->children) {
                     if (oc->kind == ui::uix::NodeKind::Text) {
                         // narrow UTF-8 → wide; lightweight version
                         const std::string& s = oc->text;
+                        raw = s;
                         for (size_t i = 0; i < s.size(); ) {
                             unsigned char b = static_cast<unsigned char>(s[i]);
                             uint32_t cp = 0; int len = 1;
@@ -652,9 +656,19 @@ void CompileElement(CompilerCtx& ctx,
                         break;  // first text only
                     }
                 }
-                items.push_back(std::move(wtext));
+                // L83 i18n: `<option>@key</option>` → record key + show key as
+                // placeholder (resolved on the first ui_page_set_locale, like
+                // <label> @key fallback). Non-@key options stay literal.
+                if (auto key = AsI18nKey(raw)) {
+                    i18nKeys.push_back(*key);
+                    items.emplace_back(key->begin(), key->end());  // ASCII key → wide
+                } else {
+                    i18nKeys.push_back(std::string{});
+                    items.push_back(std::move(wtext));
+                }
             }
             cb->SetItems(std::move(items));
+            cb->SetI18nItemKeys(std::move(i18nKeys));
         }
     }
 
@@ -991,6 +1005,10 @@ void CompileElement(CompilerCtx& ctx,
                         for (const char* p : kSvgProps) {
                             if (cs.Has(p)) ApplySvgShapeAttr(fresh, p, cs.Get(p));
                         }
+                        // 把运行时反应式 binding (:fill/:stroke 等) 设的值补回 ——
+                        // 最高优先级, 覆盖 static/CSS。否则 hover/state 重建 shape 会
+                        // 丢掉 binding 值 (反应式 SVG 图标一 hover 就透明)。
+                        rawSvg->ReapplyBoundAttrs(i, fresh);
                         shapes[i] = std::move(fresh);
                     }
                 };
@@ -1225,6 +1243,7 @@ CollectVarsWithTheme(const ui::css::Stylesheet& sheet) {
     if (!has("--bg-2"))             vars.emplace_back("--bg-2",            FormatHex(T.background2));
     if (!has("--bg-3"))             vars.emplace_back("--bg-3",            FormatHex(T.background3));
     if (!has("--bg-4"))             vars.emplace_back("--bg-4",            FormatHex(T.background4));
+    if (!has("--bg-elevated"))      vars.emplace_back("--bg-elevated",     FormatHex(T.elevatedBg));
 
     // Text foregrounds
     if (!has("--fg"))               vars.emplace_back("--fg",              FormatHex(T.foreground1));
@@ -1274,7 +1293,7 @@ CollectVarsWithTheme(const ui::css::Stylesheet& sheet) {
 void RebuildThemeVars(std::vector<std::pair<std::string, std::string>>& vars) {
     static const char* kThemeKeys[] = {
         "--accent","--accent-hover","--accent-press","--accent-text","--accent-selected",
-        "--window-bg","--window-border","--bg","--bg-2","--bg-3","--bg-4",
+        "--window-bg","--window-border","--bg","--bg-2","--bg-3","--bg-4","--bg-elevated",
         "--fg","--fg-2","--fg-3","--fg-4","--fg-on-accent",
         "--border","--border-subtle",
         "--sidebar-bg","--sidebar-text","--sidebar-hover",
@@ -1305,6 +1324,7 @@ void RebuildThemeVars(std::vector<std::pair<std::string, std::string>>& vars) {
     add("--bg-2",            T.background2);
     add("--bg-3",            T.background3);
     add("--bg-4",            T.background4);
+    add("--bg-elevated",     T.elevatedBg);
     add("--fg",              T.foreground1);
     add("--fg-2",            T.foreground2);
     add("--fg-3",            T.foreground3);

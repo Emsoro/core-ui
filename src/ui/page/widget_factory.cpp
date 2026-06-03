@@ -1032,6 +1032,7 @@ WidgetPtr ConstructByTag(const std::string& tag, const std::string& text,
     if (tag == "img") {
         std::string src;
         ImageWidget::Fit fit = ImageWidget::Fit::Contain;
+        float fw = 0, fh = 0;
         for (const auto& a : node.attrs) {
             if (a.kind != ui::uix::AttrKind::Static) continue;
             if (a.name == "src") src = a.rawValue;
@@ -1041,9 +1042,16 @@ WidgetPtr ConstructByTag(const std::string& tag, const std::string& text,
                 else if (a.rawValue == "contain") fit = ImageWidget::Fit::Contain;
                 else if (a.rawValue == "none")    fit = ImageWidget::Fit::None;
             }
+            // width/height 属性 → fixedW/fixedH，跟 <svg> 分支一致。
+            // ImageWidget::SizeHint() 已用 fixedW/H（>0 时优先于固有尺寸）。
+            // CSS width/height 仍可在 layout 阶段覆盖。
+            else if (a.name == "width")  { try { fw = std::stof(a.rawValue); } catch (...) {} }
+            else if (a.name == "height") { try { fh = std::stof(a.rawValue); } catch (...) {} }
         }
         auto img = std::make_shared<ImageWidget>(src);
         img->SetFit(fit);
+        if (fw > 0) img->fixedW = fw;
+        if (fh > 0) img->fixedH = fh;
         return img;
     }
 

@@ -245,11 +245,30 @@ void PageState::LoadTranslations(const std::string& locale,
 }
 
 void PageState::SetLocale(const std::string& locale) {
-    if (locale == currentLocale_) return;
-    currentLocale_ = locale;
-    // Mirror onto the proxy's $locale slot — set-trap fires, every binding
-    // that called $t() (which reads $locale internally) re-evaluates.
-    SetString("$locale", locale);
+    if (locale != currentLocale_) {
+        currentLocale_ = locale;
+        // Mirror onto the proxy's $locale slot — set-trap fires, every binding
+        // that called $t() (which reads $locale internally) re-evaluates.
+        SetString("$locale", locale);
+    }
+    // L83: combobox `<option>@key</option>` items are NOT $t bindings (the
+    // compiler bakes them into a static item list), so the $locale reactivity
+    // above doesn't refresh them. Walk the tree and re-translate any combobox
+    // carrying i18n keys. Run unconditionally so the compiler's @key
+    // placeholders resolve on the first SetLocale even when the locale is
+    // unchanged (e.g. app default == initial set).
+    std::function<void(Widget*)> retranslate = [&](Widget* w) {
+        if (!w) return;
+        if (auto* cb = dynamic_cast<ComboBoxWidget*>(w)) {
+            if (cb->HasI18nKeys()) {
+                cb->RetranslateItems([this](const std::string& k) {
+                    return ToWide(Translate(k));
+                });
+            }
+        }
+        for (auto& c : w->Children()) retranslate(c.get());
+    };
+    if (page_.root) retranslate(page_.root.get());
 }
 
 // ---- Lifecycle hooks --------------------------------------------------
@@ -468,34 +487,46 @@ void PageState::ApplyBindingToWidget(Widget* w, const std::string& prop, const u
 
     if (prop == "selected" || prop == "checked" || prop == "on") {
         bool b = v.ToBool();
-        // Use animated setters so the toggle/checkbox/radio glides between
-        // states. SetOn/SetChecked/SetSelected early-return when on_==v, so
-        // the round-trip after a click (OnMouseUp already flipped the local
-        // state, then JS state update echoes back) is a no-op and the
-        // animation kicked off in OnMouseUp keeps playing instead of being
-        // snapped to the target by an Immediate setter.
-        if (auto* rb = dynamic_cast<RadioButtonWidget*>(w))      rb->SetSelectedFromBinding(b);
-        else if (auto* cb = dynamic_cast<CheckBoxWidget*>(w))    cb->SetCheckedFromBinding(b);
-        else if (auto* tg = dynamic_cast<ToggleWidget*>(w))      tg->SetOnFromBinding(b);
+        // L45 mount-phase transition gate: widget 未 painted 时所有 binding push
+        // 走 Immediate (snap) 不动画, 让 page 在最终状态 mount; painted 之后才
+        // 走带动画 setter (用户运行时切换状态走 transition). 之前用 boundOnce_
+        // 判断"第一次 push", 但 WatchEffect 注册时立即 fire 一次 (用 .uix data()
+        // 默认值) 就消耗了 snap 通道, caller 在 prepare 之前 set 真实值反而触发
+        // 动画 — 现按 widget.PaintedOnce() 判断, 跟"用户实际看到没"对齐.
+        const bool painted = w->PaintedOnce();
+        if (auto* rb = dynamic_cast<RadioButtonWidget*>(w)) {
+            painted ? rb->SetSelected(b) : rb->SetSelectedImmediate(b);
+        } else if (auto* cb = dynamic_cast<CheckBoxWidget*>(w)) {
+            painted ? cb->SetChecked(b)  : cb->SetCheckedImmediate(b);
+        } else if (auto* tg = dynamic_cast<ToggleWidget*>(w)) {
+            painted ? tg->SetOn(b)       : tg->SetOnImmediate(b);
+        }
         return;
     }
     if (prop == "value") {
+        const bool painted = w->PaintedOnce();
         if (auto* ti = dynamic_cast<TextInputWidget*>(w)) {
-            ti->SetText(ToWide(v.ToString()));
+            ti->SetText(ToWide(v.ToString()));   // no animation, painted check irrelevant
         } else if (auto* ta = dynamic_cast<TextAreaWidget*>(w)) {
             ta->SetText(ToWide(v.ToString()));
         } else if (auto* slider = dynamic_cast<SliderWidget*>(w)) {
+            // SliderWidget::SetValue 不带 value 动画 (只有 thumb scale hover
+            // animation, 跟 value 无关), 直接 set 即可, painted 检查无意义.
             slider->SetValue(static_cast<float>(v.ToNumber()));
         } else if (auto* pb = dynamic_cast<ProgressBarWidget*>(w)) {
-            pb->SetValueFromBinding(static_cast<float>(v.ToNumber()));
+            float fv = static_cast<float>(v.ToNumber());
+            painted ? pb->SetValue(fv) : pb->SetValueImmediate(fv);
         } else if (auto* cb = dynamic_cast<CheckBoxWidget*>(w)) {
-            cb->SetCheckedFromBinding(v.ToBool());
+            bool b = v.ToBool();
+            painted ? cb->SetChecked(b) : cb->SetCheckedImmediate(b);
         } else if (auto* tg = dynamic_cast<ToggleWidget*>(w)) {
-            tg->SetOnFromBinding(v.ToBool());
+            bool b = v.ToBool();
+            painted ? tg->SetOn(b) : tg->SetOnImmediate(b);
         } else if (auto* rb = dynamic_cast<RadioButtonWidget*>(w)) {
-            rb->SetSelectedFromBinding(v.ToBool());
+            bool b = v.ToBool();
+            painted ? rb->SetSelected(b) : rb->SetSelectedImmediate(b);
         } else if (auto* nb = dynamic_cast<NumberBoxWidget*>(w)) {
-            nb->SetValue(static_cast<float>(v.ToNumber()));
+            nb->SetValue(static_cast<float>(v.ToNumber()));  // NumberBox 无动画字段, 直接 set
         } else if (auto* combo = dynamic_cast<ComboBoxWidget*>(w)) {
             if (v.IsNumber()) combo->SetSelectedIndex(static_cast<int>(v.ToNumber()));
         }
@@ -903,9 +934,10 @@ void PageState::PopulateMenuItem(
         }
     } else {
         menu->AddItemContent(mi.itemId, shortcut, content);
+        menu->SetLastItemMeta(mi.strId, mi.attrs);  // 补字符串 id + 全部属性 (点击回调用)
     }
     if (!enabled) menu->SetEnabled(mi.itemId, false);
-    if (!mi.onClick.empty()) menuItemHandlers_[mi.itemId] = mi.onClick;
+    if (!mi.onClick.empty()) menuItemHandlers_[mi.strId] = mi.onClick;
 }
 
 void PageState::AttachWindow(uint64_t winHandle) {
@@ -967,8 +999,9 @@ void PageState::AttachWindow(uint64_t winHandle) {
     // to the JSFunction we then call with this=jsState_.
     auto prev = win->onMenuItemClick;
     PageState* self = this;
-    win->onMenuItemClick = [self, prev](int itemId) {
-        auto it = self->menuItemHandlers_.find(itemId);
+    win->onMenuItemClick = [self, prev](const MenuClickInfo* info) {
+        auto it = info ? self->menuItemHandlers_.find(info->id)
+                       : self->menuItemHandlers_.end();
         if (it != self->menuItemHandlers_.end() && self->jsRt_ &&
             !JS_IsUndefined(self->jsState_)) {
             JSContext* ctx = self->jsRt_->ctx();
@@ -984,7 +1017,7 @@ void PageState::AttachWindow(uint64_t winHandle) {
             }
             JS_FreeValue(ctx, fn);
         }
-        if (prev) prev(itemId);
+        if (prev) prev(info);
     };
 }
 

@@ -7,7 +7,6 @@
   &nbsp;·&nbsp;
   <a href="https://ghboke.github.io/core-ui/"><b>📖 在线文档</b></a>
 </p>
-
 **Core UI** 是一个现代化的 Windows 桌面 UI 框架，底层基于 **Direct2D / Direct3D 11** 硬件加速渲染，对齐 Microsoft **Fluent 2** 视觉语言，把从按钮、文本框到 Flyout、Dialog、TitleBar 的 25+ 个内置控件统一在一套**纯 C API**（250+ 个导出函数）之下——Rust、Go、Python、C#、Delphi 乃至 Lua 都能直接调用，不需要写 C++ 绑定层。界面推荐用 **`.uix` 单文件组件**（Vue 3 SFC 风格：`<window>` + `<script>` + `<style>` + `<template>`）描述：响应式数据绑定、`v-if` / `v-for` / `v-model` / `@click`、CSS 子集和 CSS 变量主题，脚本由内置的 **QuickJS-NG** 在原生进程内求值——没有 DOM、没有 Webview。
 
 > **3.0 MB 一个 DLL，就能写出跟 Office / VSCode 同一设计语言的 Windows 桌面应用。**
@@ -18,7 +17,6 @@
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey)
 ![size](https://img.shields.io/badge/dll-3.0MB-brightgreen)
 ![api](https://img.shields.io/badge/C%20API-250%2B-orange)
-![script](https://img.shields.io/badge/script-QuickJS--NG-purple)
 
 ## 🎯 为什么选 Core UI
 
@@ -32,7 +30,7 @@
 | **声明式 / 响应式 UI** | JSX + 虚拟 DOM | XAML + Binding | QML | **`.uix` Vue 3 SFC（QuickJS-NG）** |
 | **学习曲线** | 大前端生态 | XAML + C# | C++ + Meta 对象 | **Vue 模板 + C 即上手** |
 
-**一句话总结**：想要 Electron 的开发体验 + 原生的性能 + Fluent 2 的颜值 + Vue 的响应式心智模型——Core UI 是目前唯一同时打满几格的方案。
+想要 Electron 的开发体验 + 原生的性能 + Fluent 2 的颜值 + Vue 的响应式心智模型——Core UI 是目前唯一同时打满几格的方案。
 
 ## 🤖 为 AI 而生
 
@@ -48,7 +46,7 @@
 
 > Cursor / Claude Code / Cline / Continue 用户推荐把 `docs/uix-ai-guide.md` 加进项目规则（`.cursorrules` / `CLAUDE.md`），一次上下文全覆盖。
 
-## ✨ 核心特性
+## 核心特性
 
 ### 🚀 轻到离谱，快到失真
 
@@ -229,9 +227,9 @@ ui_theme_set_mode(UI_THEME_LIGHT);
 
 `.uix` 的 `<style>` 用 CSS 变量引用主题色（`var(--bg)` / `var(--fg)` / `var(--accent)` / `var(--card-bg)` / `var(--border-subtle)` …），切主题时由库重新 cascade，所有控件自动响应。
 
-## 🔢 版本号
+## 版本号
 
-版本号格式：`MAJOR.MINOR.PATCH.BUILD`（当前 `1.6.0.170`），运行时可查：
+版本号格式：`MAJOR.MINOR.PATCH.BUILD`，运行时可查：
 
 ```c
 int major, minor, patch;
@@ -239,7 +237,7 @@ ui_core_version(&major, &minor, &patch);   // 1, 6, 0
 const char* v = ui_core_version_string();   // "1.6.0.170"
 ```
 
-## 🤝 适用场景
+## 适用场景
 
 - ✅ **Windows 工具类桌面应用**（下载器、图片查看器、配置管理器、资料库工具）
 - ✅ **需要 Fluent 外观但不愿被 .NET / WinUI 绑架**的原生项目
@@ -251,5 +249,3 @@ const char* v = ui_core_version_string();   // "1.6.0.170"
 ## 📝 许可证
 
 [MIT License](./LICENSE) © core-ui contributors
-
-— 如果这个项目让你少写了一个 Electron 应用，**请点一个 Star ⭐**。

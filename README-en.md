@@ -7,7 +7,6 @@
   &nbsp;·&nbsp;
   <a href="https://ghboke.github.io/core-ui/"><b>📖 Online Docs</b></a>
 </p>
-
 **Core UI** is a modern Windows desktop UI framework. Rendering runs on **Direct2D / Direct3D 11** hardware acceleration, aligned with Microsoft's **Fluent 2** visual language, and every widget — from buttons and text fields to Flyout, Dialog, and TitleBar (25+ built-ins) — is exposed through a single **pure C API (250+ functions)**, so Rust, Go, Python, C#, Delphi, and even Lua can bind it directly without a C++ shim. UIs are best described in **`.uix` single-file components** — Vue 3 SFC style (`<window>` + `<script>` + `<style>` + `<template>`) with reactive bindings, `v-if` / `v-for` / `v-model` / `@click`, a CSS subset, and CSS-variable theming. Scripts are evaluated in-process by an embedded **QuickJS-NG** runtime — no DOM, no Webview.
 
 > **A 3.0 MB single DLL that ships Office / VS Code-grade UI on Windows.**
@@ -18,7 +17,6 @@
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey)
 ![size](https://img.shields.io/badge/dll-3.0MB-brightgreen)
 ![api](https://img.shields.io/badge/C%20API-250%2B-orange)
-![script](https://img.shields.io/badge/script-QuickJS--NG-purple)
 
 ## 🎯 Why Core UI
 
@@ -32,7 +30,7 @@
 | **Declarative / reactive UI** | JSX + virtual DOM | XAML + Binding | QML | **`.uix` Vue 3 SFC (QuickJS-NG)** |
 | **Learning curve** | full-stack JS | XAML + C# | C++ + meta object | **Vue templates + C, instant** |
 
-**In one line:** You want Electron's DX + native-level performance + Fluent 2 looks + Vue's reactivity model — Core UI is currently the only option that checks all those boxes.
+You want Electron's DX + native-level performance + Fluent 2 looks + Vue's reactivity model — Core UI is currently the only option that checks all those boxes.
 
 ## 🤖 Built for the AI Era
 
@@ -48,7 +46,7 @@
 
 > **Cursor / Claude Code / Cline / Continue users:** add `docs/uix-ai-guide.md` to your project rules (`.cursorrules` / `CLAUDE.md`) for full coverage in a single context. Docs are currently authored in Chinese; English translations are planned.
 
-## ✨ Core Features
+## Core Features
 
 ### 🚀 Ridiculously small, absurdly fast
 
@@ -229,9 +227,9 @@ ui_theme_set_mode(UI_THEME_LIGHT);
 
 `.uix` `<style>` blocks reference theme colors via CSS variables (`var(--bg)` / `var(--fg)` / `var(--accent)` / `var(--card-bg)` / `var(--border-subtle)` …) — the library re-cascades on theme change so all controls follow.
 
-## 🔢 Versioning
+## Versioning
 
-Version format: `MAJOR.MINOR.PATCH.BUILD` (currently `1.6.0.170`), queryable at runtime:
+Version format: `MAJOR.MINOR.PATCH.BUILD`, queryable at runtime:
 
 ```c
 int major, minor, patch;
@@ -239,7 +237,7 @@ ui_core_version(&major, &minor, &patch);   // 1, 6, 0
 const char* v = ui_core_version_string();   // "1.6.0.170"
 ```
 
-## 🤝 Where It Fits
+## Where It Fits
 
 - ✅ **Windows utility apps** (downloaders, image viewers, config managers, data tools)
 - ✅ **Native projects that want Fluent looks** without getting locked into .NET / WinUI
@@ -251,5 +249,3 @@ const char* v = ui_core_version_string();   // "1.6.0.170"
 ## 📝 License
 
 [MIT License](./LICENSE) © core-ui contributors
-
-— If this project saved you from shipping another Electron app, **please drop a Star ⭐**.

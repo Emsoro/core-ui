@@ -105,7 +105,7 @@ export default {
 - 没有 `<script setup>` / 组合式 API（`ref` / `reactive` / `watch`）
 - 没有 lifecycle hooks（`mounted` / `updated` / `unmounted`）
 - 没有 props / emit / `<slot>`（component 系统已删）
-- `data()` 必须返回对象；嵌套对象 / 数组 mutation **不会** 触发更新（v0 限制），需整体替换：
+- `data()` 必须返回对象；顶层赋值会触发更新，嵌套对象 / 数组原地 mutation 不会触发父属性 watcher，列表更新建议整体替换：
   ```js
   this.items.push(x);          // ❌ 不触发
   this.items = [...this.items, x];   // ✅ 触发
@@ -243,21 +243,21 @@ CSS 子集 + 选择器 + cascade。常用属性：
 
 | 标签 | 作用 |
 |------|------|
-| `div` | flex 容器 (默认 column) |
-| `label` | 文本（不可编辑） |
+| `div` / `section` / `nav` | flex 容器 (默认 column) |
+| `label` / `span` / `p` / `h1`-`h6` | 文本（不可编辑） |
 | `button` | 按钮 |
-| `input` | 文本输入；`type="checkbox"` / `type="range"` 切换形态 |
+| `input` | 文本输入；`type="password"` / `checkbox` / `radio` / `range` / `number` 切换形态 |
 | `textarea` | 多行文本 |
 | `toggle` | 开关 |
-| `slider` | 滑条（同 `input type="range"`） |
-| `checkbox` / `radio` | 同名控件 |
-| `combobox` / `select` | 下拉 |
+| `select` | 下拉，映射到 `ComboBoxWidget` |
 | `progressbar` | 进度条 |
-| `numberbox` | 数字步进 |
 | `expander` | 折叠面板 |
-| `flyout` | 弹出面板 |
-| `image` / `img` | 位图 / SVG |
+| `ScrollView` | 竖向滚动容器 |
+| `TitleBar` | 无边框窗口标题栏 |
+| `img` | 位图 / SVG 资源 |
 | `svg` | SVG 子树 |
+| `custom` | 自绘 widget |
+| `tabs` | 标签页容器 |
 | `menu` / `menuitem` / `separator` | 上下文菜单 |
 
 每个 widget 详细属性见 `docs/controls.md`。
@@ -392,7 +392,7 @@ ui_page_destroy(page);
 - ❌ `# comment` —— 用 JS 的 `//` 或 `/* */`
 - ❌ `<import src="..." as="X"/>` —— component 系统已删
 - ❌ `<script setup>` / `ref()` / `watch()` —— 无组合式
-- ❌ `state.items.push(x)` —— 嵌套深 mutation 不响应，请整替
+- ❌ `this.items.push(x)` —— 数组原地 mutation 不触发依赖 `items` 的 binding，请整体替换
 - ❌ Vue / npm 生态库（不接 webview，不能 `import` 任何 npm 包）
 
 ---
@@ -405,7 +405,7 @@ ui_page_destroy(page);
 > 2. `<script>` 用 Vue 3 Options API：`export default { data() { return {...} }, computed: {...}, methods: {...} }`
 > 3. 模板表达式不写 `this.` 前缀（编译期自动加）
 > 4. 列表用 `v-for="(item, i) in items" :key="item.id"`
-> 5. 嵌套对象 mutation 不响应，要整替数组
+> 5. 列表更新用整体替换数组，例如 `items = [...items, x]`
 > 6. CSS 用 flex（不用 grid），常用属性见 §6
 > 7. 不要写 `<import>` / `<script setup>` / `ref()` / `watch()`
 >

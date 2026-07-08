@@ -8,22 +8,22 @@
   <a href="https://ghboke.github.io/core-ui/"><b>📖 在线文档</b></a>
 </p>
 
-**Core UI** 是一个现代化的 Windows 桌面 UI 框架，底层基于 **Direct2D / Direct3D 11** 硬件加速渲染，对齐 Microsoft **Fluent 2** 视觉语言，把从按钮、文本框到 Flyout、Dialog、TitleBar 的 25+ 个内置控件统一在一套**纯 C API**（250+ 个导出函数）之下——Rust、Go、Python、C#、Delphi 乃至 Lua 都能直接调用，不需要写 C++ 绑定层。界面推荐用 **`.uix` 单文件组件**（Vue 3 SFC 风格：`<window>` + `<script>` + `<style>` + `<template>`）描述：响应式数据绑定、`v-if` / `v-for` / `v-model` / `@click`、CSS 子集和 CSS 变量主题，脚本由内置的 **QuickJS-NG** 在原生进程内求值——没有 DOM、没有 Webview。
+**Core UI** 是一个现代化的 Windows 桌面 UI 框架，底层基于 **Direct2D / Direct3D 11** 硬件加速渲染，对齐 Microsoft **Fluent 2** 视觉语言，把从按钮、文本框到 Flyout、Dialog、TitleBar 的 25+ 个内置控件统一在一套**纯 C API**（400+ 个导出函数）之下——Rust、Go、Python、C#、Delphi 乃至 Lua 都能直接调用，不需要写 C++ 绑定层。界面推荐用 **`.uix` 单文件组件**（Vue 3 SFC 风格：`<window>` + `<script>` + `<style>` + `<template>`）描述：响应式数据绑定、`v-if` / `v-for` / `v-model` / `@click`、CSS 子集和 CSS 变量主题，脚本由内置的 **QuickJS-NG** 在原生进程内求值——没有 DOM、没有 Webview。
 
-> **3.0 MB 一个 DLL，就能写出跟 Office / VSCode 同一设计语言的 Windows 桌面应用。**
+> **4.1 MB 一个 DLL，就能写出跟 Office / VSCode 同一设计语言的 Windows 桌面应用。**
 > 不要 Chromium、不要 .NET、不要 Qt 几十兆的 moc/uic——一个 C 头文件，一份 `.uix` 单文件组件，搞定。
 
-![version](https://img.shields.io/badge/version-1.6.0.170-blue)
+![version](https://img.shields.io/badge/version-1.7.0.253-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey)
-![size](https://img.shields.io/badge/dll-3.0MB-brightgreen)
-![api](https://img.shields.io/badge/C%20API-250%2B-orange)
+![size](https://img.shields.io/badge/dll-4.1MB-brightgreen)
+![api](https://img.shields.io/badge/C%20API-400%2B-orange)
 
 ## 🎯 为什么选 Core UI
 
 | 对比维度 | Electron | WPF / WinUI 3 | Qt | **Core UI** |
 |---------|----------|---------------|-----|-------------|
-| **分发体积** | 100+ MB | 需要 .NET 运行时 | 40+ MB Qt DLLs | **3.0 MB 单 DLL** |
+| **分发体积** | 100+ MB | 需要 .NET 运行时 | 40+ MB Qt DLLs | **4.1 MB 单 DLL** |
 | **启动时间** | 1–3 秒 | 0.5–1 秒 | 0.5–1 秒 | **< 200 ms** |
 | **内存占用** | 150+ MB | 80+ MB | 60+ MB | **< 30 MB** |
 | **语言绑定** | 只能 JS | 只能 .NET | 只能 C++ | **C ABI，任意语言** |
@@ -43,7 +43,7 @@
 | **[`docs/uix-ai-guide.md`](./docs/uix-ai-guide.md)** | **自包含速查表**：`.uix` 结构 + 模板 + 脚本 + CSS 子集 + widget 列表 + 例子 |
 | **[`docs/uix-guide.md`](./docs/uix-guide.md)** | Vue 3 SFC 完整指南、cookbook、限制 |
 | **[`docs/debug-simulation.md`](./docs/debug-simulation.md)** | `ui_debug_*` 事件注入 + Named Pipe IPC，AI 自验证闭环 |
-| **[`UI_CORE_API.md`](./UI_CORE_API.md)** | 250+ 导出函数完整清单，按模块分组 |
+| **[`UI_CORE_API.md`](./UI_CORE_API.md)** | 400+ 导出函数完整清单，按模块分组 |
 
 > Cursor / Claude Code / Cline / Continue 用户推荐把 `docs/uix-ai-guide.md` 加进项目规则（`.cursorrules` / `CLAUDE.md`），一次上下文全覆盖。
 
@@ -51,7 +51,7 @@
 
 ### 🚀 轻到离谱，快到失真
 
-- **3.0 MB 全量 DLL**，静态编译后 demo exe 仅 **~2 MB**，可装进 U 盘跑
+- **4.1 MB 全量 DLL**，静态编译后 demo exe 约 **2.2 MB**，可装进 U 盘跑
 - **Direct2D + Direct3D 11** 全硬件加速，Per-Monitor DPI V2 一次画对
 - **冷启动 < 200ms**，空窗口内存 **< 30 MB**，60 fps 动画 CPU 占用 **< 3%**
 
@@ -60,7 +60,7 @@
 - 严格对齐 **Microsoft Fluent 2 Design Token**：色彩、圆角、阴影、动画无一例外
 - 深色 / 浅色主题**一行切换**，所有内置控件自动响应；CSS 变量随之 cascade
 - **自定义无边框窗口**自带 `<TitleBar>` 控件，系统级拖拽 / 贴靠 / 动画
-- 25+ 控件颗粒度对标 WinUI 3：`button` / `input` / `toggle` / `combobox` / `progressbar` / `menu` / `Dialog` / `Toast`...
+- 25+ 控件颗粒度对标 WinUI 3：`button` / `input` / `toggle` / `select` / `progressbar` / `menu` / `Dialog` / `Toast`...
 
 ### 🧩 `.uix` 单文件组件 — 像写 Vue 一样写桌面 UI
 
@@ -118,7 +118,7 @@ ui_run();
 ui_page_destroy(page);
 ```
 
-- **250+ 导出函数**，句柄全部 `uint64_t`，没有一个 C++ 类型泄漏
+- **400+ 导出函数**，句柄全部 `uint64_t`，没有一个 C++ 类型泄漏
 - Rust / Go / Python / C# / Delphi / Pascal / Lua 全部能直接绑定
 - 任意 widget（含 `<custom>` 自绘 widget）都能挂 `ui_widget_on_mouse_*` / `on_focus` / `on_wheel` 等全套事件回调，不再受"只有 button / input 能拿 onclick"的限制
 
@@ -207,11 +207,11 @@ ui_page_load_language_string(page, "zh", k_lang_zh);
 |---|---|
 | **容器** | `div`（Flexbox：`flex-direction` / `flex` / `gap` / `padding`）|
 | **文本** | `label`（多行、自动换行）|
-| **按钮** | `button`、`IconButton` |
+| **按钮** | `button` |
 | **输入** | `input`（type=`text` / `password` / `checkbox` / `radio` / `range` / `number`）、`textarea` |
-| **选择** | `toggle`、`combobox` |
-| **状态** | `progressbar`，`badge` 类（CSS）|
-| **弹出** | `menu` / `menuitem` / `separator`、`Flyout`、`Dialog`、`Toast` |
+| **选择** | `toggle`、`select` |
+| **状态** | `progressbar` |
+| **弹出** | `menu` / `menuitem` / `separator` |
 | **图像** | `img`、`svg`（内联），底层 `ImageView` 支持缩放 / 平移 / 裁剪 |
 | **窗口** | `TitleBar`（仅 `frameless="true"` 时使用） |
 
@@ -234,8 +234,8 @@ ui_theme_set_mode(UI_THEME_LIGHT);
 
 ```c
 int major, minor, patch;
-ui_core_version(&major, &minor, &patch);   // 1, 6, 0
-const char* v = ui_core_version_string();   // "1.6.0.170"
+ui_core_version(&major, &minor, &patch);   // 1, 7, 0
+const char* v = ui_core_version_string();   // "1.7.0.253"
 ```
 
 ## 适用场景

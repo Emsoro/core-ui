@@ -20,7 +20,7 @@ enum class AttrKind {
 
 struct Attr {
     AttrKind kind = AttrKind::Static;
-    std::string name;     // for Bind/Event: target ("class", "click"); for Directive: "if" / "for" / "model"
+    std::string name;     // for Bind/Event: target ("class", "click"); for Directive: "if" / "for" / "model" / "show"
     std::string rawValue; // original string value (Bind/Event: raw JS source)
     int line = 0;
     int col  = 0;

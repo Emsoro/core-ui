@@ -152,7 +152,8 @@ computed: {
 
 - 被 `@event="methodName"` 或 `@event="methodName(arg)"` 触发。
 - Body 是任意 JS 函数体；可读写 `this.X`，可调其它 `this.method()`。
-- 数组改动**必须整替**才能响应（v0 限制：嵌套不深 reactive）：
+- 顶层状态赋值会触发响应式更新；嵌套对象 / 数组原地 mutation 不会触发父属性
+  watcher，列表更新建议整体替换：
 
 ```js
 methods: {
@@ -163,8 +164,8 @@ methods: {
     else                  this.count++;
   },
   addTag(tag)  {
-    // ❌ this.tags.push(tag)  — push 不响应
-    // ✅ 整替
+    // ❌ this.tags.push(tag)        — 原地改数组，不触发依赖 tags 的 binding
+    // ✅ 整体替换，触发 tags 写入
     this.tags = [...this.tags, tag];
   },
   total()      {
@@ -329,8 +330,10 @@ SVG `<g>` 分组、SVG `<filter>`/`<mask>`/`<clipPath>`、SMIL animate。
 <button :disabled="loading">Save</button>
 ```
 
-常用可绑属性：`class`、`visible`（**不要**用 `style` —— v0 没有运行时 CSS 注入；
-用组合 `class` 代替）。
+常用可绑属性：`class`、`visible`、`enabled`、`value`、`checked` / `selected` /
+`on`、`width` / `height`、`left` / `top` / `right` / `bottom`、`opacity`、
+`color`、`background-color`、`src`、`wrap`。`:style` 不做运行时 CSS 注入，
+需要动态样式时优先切换 `:class` 或绑定具体属性。
 
 ### 5.3 事件绑定 `@event="..."`
 
@@ -339,13 +342,14 @@ SVG `<g>` 分组、SVG `<filter>`/`<mask>`/`<clipPath>`、SMIL animate。
 <button @click="remove(item.id)">Delete</button>
 ```
 
-v0 支持的事件：`@click`（所有可点击控件）。表单 input/change 事件由 `v-model` 自动
-处理；widget 层有 `@input` / `@change` 但不开放给 `@event`。
+支持的事件：`@click`、`@mousedown`、`@mousemove`、`@mouseup`、`@wheel`、
+`@dblclick`、`@submit`、`@focus`、`@blur`、`@change`、`@input`。鼠标事件的
+handler 会收到 `$event` 对象（`x/y/delta/button`），`change/input` 收到控件标量值。
 
 ### 5.4 `v-if="cond"`
 
 条件为真时挂载元素及其子树；为假时**完全卸载**（不是隐藏）。状态在隐藏时销毁。
-需要保留状态的话要换思路（v0 没有 `v-show`）。
+如果要保留 widget 身份和内部状态，用 `v-show` 或 `:visible`。
 
 ```html
 <p v-if="count > 0">Clicked {{ count }} times</p>
@@ -546,7 +550,7 @@ obj.unknown          # 返回 null（不报错）
 | `<input type="range"/>` | `SliderWidget` | 解析 `min`/`max`/`value` 静态属性（自 build 9 起，之前硬编码 0..100） |
 | `<input type="number"/>` | `NumberBoxWidget` | 解析 `min`/`max`/`value`/`step`；按 `step` 自动推导显示小数位（0.1→1, 0.01→2）|
 | `<textarea/>` | `TextAreaWidget` | 多行 |
-| `<select>` | `ComboBoxWidget` | `<option value="v">Label</option>` 子节点自动填充（v0 忽略 option 的 value）|
+| `<select>` | `ComboBoxWidget` | `<option>Label</option>` 子节点自动填充；`value` 属性目前不参与选择值，`v-model` 使用索引 |
 | `<ul>` / `<ol>` | `VBoxWidget` | |
 | `<li>` | `HBoxWidget` | |
 | `<hr/>` | `SeparatorWidget` | |
@@ -661,10 +665,10 @@ export default {
 <input v-model="name" placeholder="Your name"/>
 <input type="checkbox" v-model="agree"/>
 <label>I agree</label>
-<combobox v-model="role">
+<select v-model="role">
   <option value="0">Admin</option>
   <option value="1">User</option>
-</combobox>
+</select>
 <label v-if="agree">{{ `Thanks, ${name}!` }}</label>
 ```
 
@@ -886,12 +890,12 @@ ui_asset_register_resolver(my_resolver, my_userdata);
 | CSS `overflow: auto` 不生效 | 显式包 `<ScrollView>` |
 | 没有 `@media` 查询 | 布局固定；响应式靠 `flex-grow` / `flex-shrink` |
 | 没有 `@keyframes` / CSS 动画 | 只能用 `transition: prop duration easing` 在可动画属性上 |
-| 没有 `<script>` 运行时 | 简单逻辑用 `<script>.methods`，复杂逻辑用 C handler |
-| 没有 `this` / `class` / `async` / `for (;;)` / `while` / `try/catch` | 用 `if` / `for-of` / `.reduce` 等 |
+| 没有浏览器 DOM / Web API | `.uix` 脚本运行在 QuickJS 中，没有 `window` / `document` / npm 包 |
+| 模板表达式不写 `this.` 前缀 | `<script>` 的 methods/computed 内正常使用 `this`；模板里由编译器自动改写 |
 | 没有 `<Component>` import 其它 `.uix` | 用 C++ 注册 CamelCase tag；或复制粘贴 |
 | 没有 `position: sticky` | 固定 header 放在 `ScrollView` 外面 |
 | 没有 CSS Grid / float | 用 flex（row/column）+ 嵌套容器 |
-| 没有 `v-show` | 用 `v-if`（隐藏时销毁）或 `:class` 切换 |
+| `v-show` 只切换 visible | 要销毁/重建子树时用 `v-if` |
 | 运行时切 frameless 会让 `<TitleBar>` 自动布局失效 | 用响应式变量 + `v-if` 手动控制 `<TitleBar>` 出现/消失 |
 | v-for 和 v-if 在同一个元素上 | 分开：外层 v-if 包 v-for；或在 computed 里预过滤 |
 | `<option value="x">` 的 value | attr 解析但不使用；v-model 返回的是**索引**数字 |
@@ -1442,11 +1446,11 @@ A + B 可同时存在不冲突。
 3. ☐ 所有标签闭合（void 用 `<br/>`，容器用 `<div></div>`）
 4. ☐ 如果 `frameless="true"`，`<template>` 内有 `<TitleBar/>`
 5. ☐ 如果内容可能超出窗口，用 `<ScrollView>` 包 + CSS `flex: 1`
-5. ☐ `v-for` 带 `:key`（即使 v0 的 keyed diff 简单也要写）
-6. ☐ 数组修改函数式：`x = x.push(y)`，不是 `x.push(y)`
+5. ☐ `v-for` 带稳定 `:key`
+6. ☐ 数组修改整体替换：`x = [...x, y]`，不是 `x.push(y)`
 7. ☐ handler body 是语句或 `{}` 块；不是裸表达式
 8. ☐ computed 之间无循环依赖
-9. ☐ 没有 `this` / `class` / `function` / `let` / `const` 关键字
+9. ☐ 模板表达式里不写 `this.` 前缀；复杂逻辑放到 `methods` / `computed`
 10. ☐ 没有 CSS grid / float / keyframes / media queries
 11. ☐ `<select v-model="x">` 的 `x` 是**数字**（索引）
 12. ☐ 没有在 `<p>` 里混合 inline 元素（会堆叠）

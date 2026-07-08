@@ -8,22 +8,22 @@
   <a href="https://ghboke.github.io/core-ui/"><b>📖 Online Docs</b></a>
 </p>
 
-**Core UI** is a modern Windows desktop UI framework. Rendering runs on **Direct2D / Direct3D 11** hardware acceleration, aligned with Microsoft's **Fluent 2** visual language, and every widget — from buttons and text fields to Flyout, Dialog, and TitleBar (25+ built-ins) — is exposed through a single **pure C API (250+ functions)**, so Rust, Go, Python, C#, Delphi, and even Lua can bind it directly without a C++ shim. UIs are best described in **`.uix` single-file components** — Vue 3 SFC style (`<window>` + `<script>` + `<style>` + `<template>`) with reactive bindings, `v-if` / `v-for` / `v-model` / `@click`, a CSS subset, and CSS-variable theming. Scripts are evaluated in-process by an embedded **QuickJS-NG** runtime — no DOM, no Webview.
+**Core UI** is a modern Windows desktop UI framework. Rendering runs on **Direct2D / Direct3D 11** hardware acceleration, aligned with Microsoft's **Fluent 2** visual language, and every widget — from buttons and text fields to Flyout, Dialog, and TitleBar (25+ built-ins) — is exposed through a single **pure C API (400+ functions)**, so Rust, Go, Python, C#, Delphi, and even Lua can bind it directly without a C++ shim. UIs are best described in **`.uix` single-file components** — Vue 3 SFC style (`<window>` + `<script>` + `<style>` + `<template>`) with reactive bindings, `v-if` / `v-for` / `v-model` / `@click`, a CSS subset, and CSS-variable theming. Scripts are evaluated in-process by an embedded **QuickJS-NG** runtime — no DOM, no Webview.
 
-> **A 3.0 MB single DLL that ships Office / VS Code-grade UI on Windows.**
+> **A 4.1 MB single DLL that ships Office / VS Code-grade UI on Windows.**
 > No Chromium. No .NET. No 40 MB of Qt DLLs and moc/uic preprocessors. One C header, one `.uix` single-file component — done.
 
-![version](https://img.shields.io/badge/version-1.6.0.170-blue)
+![version](https://img.shields.io/badge/version-1.7.0.253-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey)
-![size](https://img.shields.io/badge/dll-3.0MB-brightgreen)
-![api](https://img.shields.io/badge/C%20API-250%2B-orange)
+![size](https://img.shields.io/badge/dll-4.1MB-brightgreen)
+![api](https://img.shields.io/badge/C%20API-400%2B-orange)
 
 ## 🎯 Why Core UI
 
 | Dimension | Electron | WPF / WinUI 3 | Qt | **Core UI** |
 |-----------|----------|---------------|-----|-------------|
-| **Distribution size** | 100+ MB | needs .NET runtime | 40+ MB Qt DLLs | **3.0 MB single DLL** |
+| **Distribution size** | 100+ MB | needs .NET runtime | 40+ MB Qt DLLs | **4.1 MB single DLL** |
 | **Startup time** | 1–3 s | 0.5–1 s | 0.5–1 s | **< 200 ms** |
 | **Memory footprint** | 150+ MB | 80+ MB | 60+ MB | **< 30 MB** |
 | **Language bindings** | JS only | .NET only | C++ only | **C ABI, any language** |
@@ -43,7 +43,7 @@ You want Electron's DX + native-level performance + Fluent 2 looks + Vue's react
 | **[`docs/uix-ai-guide.md`](./docs/uix-ai-guide.md)** | **Self-contained cheatsheet**: `.uix` structure + template + script + CSS subset + widget list + examples |
 | **[`docs/uix-guide.md`](./docs/uix-guide.md)** | Vue 3 SFC complete guide, cookbook, limitations |
 | **[`docs/debug-simulation.md`](./docs/debug-simulation.md)** | `ui_debug_*` event injection + Named Pipe IPC, AI self-verification loop |
-| **[`UI_CORE_API.md`](./UI_CORE_API.md)** | 250+ exported functions, grouped by module |
+| **[`UI_CORE_API.md`](./UI_CORE_API.md)** | 400+ exported functions, grouped by module |
 
 > **Cursor / Claude Code / Cline / Continue users:** add `docs/uix-ai-guide.md` to your project rules (`.cursorrules` / `CLAUDE.md`) for full coverage in a single context. Docs are currently authored in Chinese; English translations are planned.
 
@@ -51,7 +51,7 @@ You want Electron's DX + native-level performance + Fluent 2 looks + Vue's react
 
 ### 🚀 Ridiculously small, absurdly fast
 
-- **3.0 MB full DLL**, or a **~2 MB statically-linked exe** — it fits on a USB stick
+- **4.1 MB full DLL**, or a **~2.2 MB statically-linked exe** — it fits on a USB stick
 - **Direct2D + Direct3D 11** full hardware acceleration, Per-Monitor DPI V2 out of the box
 - **Cold start < 200 ms**, empty-window memory **< 30 MB**, 60 fps animation CPU usage **< 3%**
 
@@ -60,7 +60,7 @@ You want Electron's DX + native-level performance + Fluent 2 looks + Vue's react
 - Strictly aligned with **Microsoft Fluent 2 design tokens**: colors, radii, shadows, motion — no shortcuts
 - Dark / light theme switches with **one line** of C; CSS variables re-cascade automatically
 - **Custom borderless window** ships with a `<TitleBar>` control, native drag / snap / animation
-- 25+ controls match WinUI 3's granularity: `button` / `input` / `toggle` / `combobox` / `progressbar` / `menu` / `Dialog` / `Toast` ...
+- 25+ controls match WinUI 3's granularity: `button` / `input` / `toggle` / `select` / `progressbar` / `menu` / `Dialog` / `Toast` ...
 
 ### 🧩 `.uix` single-file components — write desktop UI like Vue
 
@@ -118,7 +118,7 @@ ui_run();
 ui_page_destroy(page);
 ```
 
-- **250+ exported functions**, all handles are plain `uint64_t` — zero C++ types leak through
+- **400+ exported functions**, all handles are plain `uint64_t` — zero C++ types leak through
 - Rust / Go / Python / C# / Delphi / Pascal / Lua can all bind directly
 - Any widget (including custom-drawn `<custom>` widgets) can receive the full set of event callbacks — `ui_widget_on_mouse_*` / `on_focus` / `on_wheel` — not just `button` / `input`
 
@@ -207,11 +207,11 @@ Tags inside `.uix` templates map directly to native widgets:
 |---|---|
 | **Containers** | `div` (Flexbox: `flex-direction` / `flex` / `gap` / `padding`) |
 | **Text** | `label` (multi-line, auto-wrap) |
-| **Buttons** | `button`, `IconButton` |
+| **Buttons** | `button` |
 | **Input** | `input` (type=`text` / `password` / `checkbox` / `radio` / `range` / `number`), `textarea` |
-| **Selection** | `toggle`, `combobox` |
-| **Status** | `progressbar`, `badge` (CSS class) |
-| **Popups** | `menu` / `menuitem` / `separator`, `Flyout`, `Dialog`, `Toast` |
+| **Selection** | `toggle`, `select` |
+| **Status** | `progressbar` |
+| **Popups** | `menu` / `menuitem` / `separator` |
 | **Image** | `img`, `svg` (inline); the underlying `ImageView` supports zoom / pan / crop |
 | **Window** | `TitleBar` (only when `frameless="true"`) |
 
@@ -234,8 +234,8 @@ Version format: `MAJOR.MINOR.PATCH.BUILD`, queryable at runtime:
 
 ```c
 int major, minor, patch;
-ui_core_version(&major, &minor, &patch);   // 1, 6, 0
-const char* v = ui_core_version_string();   // "1.6.0.170"
+ui_core_version(&major, &minor, &patch);   // 1, 7, 0
+const char* v = ui_core_version_string();   // "1.7.0.253"
 ```
 
 ## Where It Fits

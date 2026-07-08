@@ -1431,16 +1431,18 @@ UI_API void ui_page_on_widget_mount(UiPage p, const char* widget_id,
 UI_API void ui_page_on_widget_unmount(UiPage p, const char* widget_id,
                                        UiWidgetLifecycleCallback cb, void* userdata);
 
-/* Process-wide feature flag — switches subsequent ui_page_load_* calls to the
- * QuickJS runtime (Vue 3 SFC `export default { … }` syntax + Proxy reactive).
- * Pass v=0 to use the legacy AST + Property<Value> path (default).
+/* Historical process-wide feature flag. The page system now routes .uix files
+ * through the QuickJS runtime (Vue 3 SFC `export default { ... }` syntax +
+ * Proxy reactive state) by default; this function is kept for compatibility
+ * with older embedders that toggled the rollout explicitly.
  *
  * Also resolved from env var UI_PAGE_QUICKJS=1 if this function is not called
  * before the first ui_page_load_*.
  *
- * Phase 3a.4: only `{{ expr }}` text bindings are wired on the QuickJS path;
- * @event / v-if / v-for / v-model / methods / computed are ignored (will be
- * filled in Phases 3a.5 — 3a.9).                                         */
+ * Supported .uix features include text and attribute bindings, methods,
+ * computed values, @event handlers, v-if, v-show, v-for, v-model, i18n, and
+ * the page helper functions exposed on `this` such as $rect/$windowSize/
+ * $nextTick.                                                             */
 UI_API void ui_page_set_quickjs_enabled(int v);
 
 /* ------------------------------------------------------------------ */
